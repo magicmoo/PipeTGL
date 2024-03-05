@@ -136,7 +136,6 @@ class TGNN(torch.nn.Module):
         return self.edge_predictor(embed)
     
     def update_memory_and_mail(self, b: DGLBlock, length: int, edge_feats: Optional[torch.Tensor]=None):
-
         device = b.device
         all_nodes = b.srcdata['ID'][:length]
         all_nodes_unique, inv = torch.unique(
@@ -151,127 +150,80 @@ class TGNN(torch.nn.Module):
         mem_ts = mem_ts[inv]
         mail = mail[inv]
         mail_ts = mail_ts[inv]
+        updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
+        new_memory = updated_memory.clone().detach()
 
-        new_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
+        with torch.no_grad():
+            last_updated_nid = all_nodes.to(self.memory.device)
+            last_updated_memory = new_memory.to(self.memory.device)
+            last_updated_ts = mail_ts.to(self.memory.device)
 
-        last_updated_nid = all_nodes.to(self.memory.device)
-        last_updated_memory = new_memory.to(self.memory.device)
-        last_updated_ts = mail_ts.to(self.memory.device)
-
-        # genereate mail
-        split_chunks = 2
-        if edge_feats is None:
-            # dummy edge features
-            edge_feats = torch.zeros(
-                last_updated_nid.shape[0] // split_chunks, self.dim_edge,
-                device=self.memory.device)
+            # genereate mail
+            split_chunks = 2
+            if edge_feats is None:
+                # dummy edge features
+                edge_feats = torch.zeros(
+                    last_updated_nid.shape[0] // split_chunks, self.dim_edge,
+                    device=self.memory.device)
 
 
-        edge_feats = edge_feats.to(self.memory.device)
+            edge_feats = edge_feats.to(self.memory.device)
 
-        src, dst, *_ = last_updated_nid.tensor_split(split_chunks)
-        mem_src, mem_dst, *_ = last_updated_memory.tensor_split(split_chunks)
-        src_mail = torch.cat([mem_src, mem_dst, edge_feats], dim=1)
-        dst_mail = torch.cat([mem_dst, mem_src, edge_feats], dim=1)
-        mail = torch.cat([src_mail, dst_mail],
-                         dim=1).reshape(-1, src_mail.shape[1])
-        nid = torch.cat(
-            [src.unsqueeze(1), dst.unsqueeze(1)], dim=1).reshape(-1)
-        mail_ts = last_updated_ts[:len(nid)]
+            src, dst, *_ = last_updated_nid.tensor_split(split_chunks)
+            mem_src, mem_dst, *_ = last_updated_memory.tensor_split(split_chunks)
+            src_mail = torch.cat([mem_src, mem_dst, edge_feats], dim=1)
+            dst_mail = torch.cat([mem_dst, mem_src, edge_feats], dim=1)
+            mail = torch.cat([src_mail, dst_mail],
+                            dim=1).reshape(-1, src_mail.shape[1])
+            nid = torch.cat(
+                [src.unsqueeze(1), dst.unsqueeze(1)], dim=1).reshape(-1)
+            mail_ts = last_updated_ts[:len(nid)]
 
-        # find unique nid to update mailbox
-        uni, inv = torch.unique(nid, return_inverse=True)
-        perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
-        perm = inv.new_empty(uni.size(0)).scatter_(0, inv, perm)
-        nid = nid[perm]
-        mail = mail[perm]
-        mail_ts = mail_ts[perm]
+            # find unique nid to update mailbox
+            uni, inv = torch.unique(nid, return_inverse=True)
+            perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
+            perm = inv.new_empty(uni.size(0)).scatter_(0, inv, perm)
+            nid = nid[perm]
+            mail = mail[perm]
+            mail_ts = mail_ts[perm]
 
-        # prepare mem
-        num_true_src_dst = last_updated_nid.shape[0] // split_chunks * 2
-        nid = last_updated_nid[:num_true_src_dst].to(self.memory.device)
-        memory = last_updated_memory[:num_true_src_dst].to(self.memory.device)
-        ts = last_updated_ts[:num_true_src_dst].to(self.memory.device)
-        # the nid of mem and mail is different
-        # after unique they are the same but perm is still different
-        uni, inv = torch.unique(nid, return_inverse=True)
-        perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
-        perm = inv.new_empty(uni.size(0)).scatter_(0, inv, perm)
-        nid = nid[perm]
-        mem = memory[perm]
-        mem_ts = ts[perm]
+            # prepare mem
+            num_true_src_dst = last_updated_nid.shape[0] // split_chunks * 2
+            nid = last_updated_nid[:num_true_src_dst].to(self.memory.device)
+            memory = last_updated_memory[:num_true_src_dst].to(self.memory.device)
+            ts = last_updated_ts[:num_true_src_dst].to(self.memory.device)
+            # the nid of mem and mail is different
+            # after unique they are the same but perm is still different
+            uni, inv = torch.unique(nid, return_inverse=True)
+            perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
+            perm = inv.new_empty(uni.size(0)).scatter_(0, inv, perm)
+            nid = nid[perm]
+            mem = memory[perm]
+            mem_ts = ts[perm]
 
-        if self.memory.partition:
-            # cat the memory first
-            all_mem = torch.cat((mem,
-                                 mem_ts.unsqueeze(dim=1),
-                                 mail,
-                                 mail_ts.unsqueeze(dim=1)),
-                                dim=1)
-            self.kvstore_client.push(nid, all_mem, mode='memory')
-        else:
-            # update mailbox first
-            self.memory.mailbox[nid] = mail
-            self.memory.mailbox_ts[nid] = mail_ts
-            # update mem
-            self.memory.node_memory[nid] = mem
-            self.memory.node_memory_ts[nid] = mem_ts
+            if self.memory.partition:
+                # cat the memory first
+                all_mem = torch.cat((mem,
+                                    mem_ts.unsqueeze(dim=1),
+                                    mail,
+                                    mail_ts.unsqueeze(dim=1)),
+                                    dim=1)
+                self.kvstore_client.push(nid, all_mem, mode='memory')
+            else:
+                # update mailbox first
+                self.memory.mailbox[nid] = mail
+                self.memory.mailbox_ts[nid] = mail_ts
+                # update mem
+                self.memory.node_memory[nid] = mem
+                self.memory.node_memory_ts[nid] = mem_ts
+        return updated_memory
 
-    # def update_memory_and_mail(self, b: DGLBlock, length: int, edge_feats: Optional[torch.Tensor]=None):
-    #     device = b.device
-    #     all_nodes = b.srcdata['ID'][:length]
-    #     mem = b.srcdata['mem'][:length]
-    #     mem_ts = b.srcdata['mem_ts'][:length]
-    #     mail = b.srcdata['mail'][:length]
-    #     mail_ts = b.srcdata['mail_ts'][:length]
+    def get_updated_memory(self, b: DGLBlock, updated_memory: torch.tensor, mem, mail, mem_ts, mail_ts):
+        memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
+        # memory = self.memory_updater(b.srcdata['mem'][length:, :], b.srcdata['mail'][length:, :],
+        #                                  b.srcdata['mem_ts'][length:], b.srcdata['mail_ts'][length:])
 
-    #     new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
-
-    #     split_chunks = 2
-    #     if edge_feats is None:
-    #         # dummy edge features
-    #         edge_feats = torch.zeros(
-    #             mem.shape[0] // split_chunks, self.dim_edge,
-    #             device=device)
-    #     edge_feats = edge_feats.to(device)
-
-    #     mem_src, mem_dst = new_memory.tensor_split(split_chunks)
-    #     src, dst = all_nodes.tensor_split(split_chunks)
-    #     src_mail = torch.cat([mem_src, mem_dst, edge_feats], dim=1)
-    #     dst_mail = torch.cat([mem_dst, mem_src, edge_feats], dim=1)
-    #     new_mail = torch.cat([src_mail, dst_mail], dim=1).reshape(-1, src_mail.shape[1])
-    #     new_mem = torch.cat([mem_src, mem_dst], dim=1).reshape(-1, mem_src.shape[1])
-    #     nid = torch.cat([src.unsqueeze(1), dst.unsqueeze(1)], dim=1).reshape(-1)
-        
-    #     ts_src, ts_dst = mail_ts.tensor_split(split_chunks)
-    #     new_mem_ts = torch.cat([ts_src.unsqueeze(1), ts_dst.unsqueeze(1)], dim=1).reshape(-1)
-    #     ts_src, ts_dst = b.srcdata['ts'][:length].tensor_split(split_chunks)
-    #     new_mail_ts = torch.cat([ts_src.unsqueeze(1), ts_dst.unsqueeze(1)], dim=1).reshape(-1)
-        
-    #     # aggregate the mail
-    #     uni, inv = torch.unique(nid, return_inverse=True)
-    #     perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
-    #     perm = inv.new_empty(uni.size(0)).scatter_(0, inv, perm)
-    #     nid = nid[perm]
-    #     new_mail = new_mail[perm]
-    #     new_mail_ts = new_mail_ts[perm]
-    #     new_mem_ts = new_mem_ts[perm]
-    #     new_mem = new_mem[perm]
-
-    #     if self.memory.partition:
-    #         # to be continue
-    #         pass
-    #     else:
-    #         self.memory.node_memory[nid] = new_mem
-    #         self.memory.node_memory_ts[nid] = new_mem_ts
-    #         self.memory.mailbox[nid] = new_mail
-    #         self.memory.mailbox_ts[nid] = new_mail_ts
-    #     return new_memory
-    
-    def get_updated_memory(self, b: DGLBlock, updated_memory: torch.tensor, length: int):
-        memory = self.memory_updater(b.srcdata['mem'], b.srcdata['mail'],
-                                         b.srcdata['mem_ts'], b.srcdata['mail_ts'])
         if 'h' in b.srcdata:
-            b.srcdata['h'] += memory
+            b.srcdata['h'] += torch.cat((updated_memory, memory), dim=0)
         else:
-            b.srcdata['h'] = memory
+            b.srcdata['h'] = torch.cat((updated_memory, memory), dim=0)

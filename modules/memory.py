@@ -148,7 +148,7 @@ class Memory:
         self.mailbox.copy_(backup['mailbox'])
         self.mailbox_ts.copy_(backup['mailbox_ts'])
 
-    def prepare_input(self, b: DGLBlock):
+    def prepare_input(self, b: DGLBlock, update_length: int):
         """
         Prepare the input for the memory module.
 
@@ -159,27 +159,27 @@ class Memory:
                 `b.srcdata['ts']` is the time stamps of all nodes.
         """
         device = b.device
-        all_nodes = b.srcdata['ID']
+        all_nodes = b.srcdata['ID'][update_length:]
         assert isinstance(all_nodes, torch.Tensor)
 
         all_nodes_unique, inv = torch.unique(
             all_nodes.cpu(), return_inverse=True)
 
         if self.partition:
-            # unique all nodes
-            pulled_memory = self.kvstore_client.pull(
-                all_nodes_unique, mode='memory')
-            mem = pulled_memory[0].to(device)
-            mem_ts = pulled_memory[1].to(device)
-            mail = pulled_memory[2].to(device)
-            mail_ts = pulled_memory[3].to(device)
+            pass
         else:
             mem = self.node_memory[all_nodes_unique].to(device)
             mem_ts = self.node_memory_ts[all_nodes_unique].to(device)
             mail = self.mailbox[all_nodes_unique].to(device)
             mail_ts = self.mailbox_ts[all_nodes_unique].to(device)
-            
-        b.srcdata['mem'] = mem[inv]
-        b.srcdata['mem_ts'] = mem_ts[inv]
-        b.srcdata['mail_ts'] = mail_ts[inv]
-        b.srcdata['mail'] = mail[inv]
+        
+        return {
+            'mem': mem[inv],
+            'mem_ts': mem_ts[inv],
+            'mail_ts': mail_ts[inv],
+            'mail': mail[inv]
+        }
+        # b.srcdata['mem'] = mem[inv]
+        # b.srcdata['mem_ts'] = mem_ts[inv]
+        # b.srcdata['mail_ts'] = mail_ts[inv]
+        # b.srcdata['mail'] = mail[inv]

@@ -1,5 +1,4 @@
 import argparse
-from distutils.dep_util import newer_group
 import logging
 import math
 import os
@@ -20,7 +19,7 @@ import torch.utils.data
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.utils.data import BatchSampler, SequentialSampler
 from tqdm import tqdm
-from torch.multiprocessing import Process, Queue
+from torch.multiprocessing import Queue, Process, Barrier
 
 import gnnflow.cache as caches
 from config import get_default_config
@@ -51,7 +50,7 @@ parser.add_argument("--epoch", help="maximum training epoch",
                     type=int, default=50)
 parser.add_argument("--lr", help='learning rate', type=float, default=0.0001)
 parser.add_argument("--num-workers", help="num workers for dataloaders",
-                    type=int, default=2)
+                    type=int, default=8)
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=8)
 parser.add_argument("--print-freq", help="print frequency",
@@ -84,17 +83,26 @@ def set_seed(seed):
 set_seed(args.seed)
 
 
-def evaluate(dataloader, sampler, model, criterion, cache, device, q_input, q_output):
+def gpu_load():
+    global training
+    # time.sleep(5)
+    # while True:
+    #     # stop when training is done
+    #     # use a global variable to stop the thread
+    #     if not training:
+    #         break
+    #     gpus = GPUtil.getGPUs()
+    #     avg_load = sum([gpu.load for gpu in gpus]) / len(gpus)
+    #     logging.info("GPU load: {:.2f}%".format(avg_load * 100))
+    #     time.sleep(1)
 
-    dist.barrier()
+
+def evaluate(dataloader, sampler, model, criterion, cache, device):
     model.eval()
     val_losses = list()
     aps = list()
     aucs_mrrs = list()
 
-    sign = True
-    flag = False
-    iteration_now = args.rank
     with torch.no_grad():
         total_loss = 0
         for target_nodes, ts, eid in dataloader:
@@ -103,27 +111,12 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, q_input, q_ou
             mfgs = cache.fetch_feature(
                 mfgs, eid)
 
-            update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
-
-            if args.rank!=0 or flag:
-                # print(f'{args.rank}recv')
-                q_input.get()
-                # print(f'{args.rank}recv finished')
-
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
-
-            if iteration_now+1 != int(len(dataloader)):
-                # print(f'{args.rank}send')
-                q_output.put(sign)
-            iteration_now += args.world_size
-            flag = True
-            
-            if args.use_memory:
-                b = mfgs[0][0]
-                input = model.memory.prepare_input(b, update_length)
-                model.get_updated_memory(b, updated_memory, **input)
+                update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
+                model.module.memory.prepare_input(b)
+                updated_memory = model.module.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                model.module.get_updated_memory(b, updated_memory, update_length)
 
             pred_pos, pred_neg = model(mfgs)
 
@@ -142,28 +135,19 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, q_input, q_ou
     auc_mrr = float(torch.tensor(aucs_mrrs).mean())
     return ap, auc_mrr
 
-def main(rank, world_size, q_input, q_output):
-    args.distributed = True
-    args.local_rank = rank
-    os.environ['LOCAL_RANK'] = str(rank)
-    os.environ['LOCAL_WORLD_SIZE'] = str(world_size)
-    args.local_world_size = world_size
+def main():
+    args.distributed = int(os.environ.get('WORLD_SIZE', 0)) > 1
+    args.local_rank = int(os.environ['LOCAL_RANK'])
+    args.local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
     torch.cuda.set_device(args.local_rank)
-    dist.init_process_group('nccl', world_size=world_size, rank=rank)
-    args.rank = torch.distributed.get_rank()
-    args.world_size = torch.distributed.get_world_size()
+    dist.init_process_group('nccl')
+    args.rank = dist.get_rank()
+    args.world_size = dist.get_world_size()
 
     logging.info("rank: {}, world_size: {}".format(args.rank, args.world_size))
 
     model_config, data_config = get_default_config(args.model, args.data)
-    if model_config["snapshot_time_window"] > 0 and args.data == "GDELT":
-        model_config["snapshot_time_window"] = 25
-    else:
-        model_config["snapshot_time_window"] = args.snapshot_time_window
-    logging.info("snapshot_time_window's value is {}".format(model_config["snapshot_time_window"]))
-    args.use_memory = model_config['use_memory']
-
-    # graph is stored in shared memory
+        # graph is stored in shared memory
     data_config["mem_resource_type"] = "shared"
 
     data_path = os.path.join(path, 'data')
@@ -182,7 +166,6 @@ def main(rank, world_size, q_input, q_output):
     # NB: learning rate is scaled by the number of workers
     args.lr = args.lr * math.sqrt(args.world_size)
     logging.info("batch size: {}, lr: {}".format(batch_size, args.lr))
-
     train_sampler = DistributedBatchSampler(
         SequentialSampler(train_ds), batch_size=batch_size,
         drop_last=False, rank=args.rank, world_size=args.world_size,
@@ -209,7 +192,7 @@ def main(rank, world_size, q_input, q_output):
     dgraph = build_dynamic_graph(
         **data_config, device=args.local_rank)
 
-    torch.distributed.barrier()
+    dist.barrier()
     # insert in batch
     for i in tqdm(range(0, len(full_data), args.ingestion_batch_size)):
         batch = full_data[i:i + args.ingestion_batch_size]
@@ -219,10 +202,12 @@ def main(rank, world_size, q_input, q_output):
         eids = batch["eid"].values.astype(np.int64)
         dgraph.add_edges(src_nodes, dst_nodes, timestamps,
                          eids, add_reverse=False)
-        torch.distributed.barrier()
+        dist.barrier()
 
     num_nodes = dgraph.max_vertex_id() + 1
     num_edges = dgraph.num_edges()
+    global iterations
+    iteraions = (num_edges+batch_size-1)/batch_size
     # put the features in shared memory when using distributed training
     node_feats, edge_feats = load_feat(
         args.data, data_dir=data_path, shared_memory=args.distributed,
@@ -237,12 +222,12 @@ def main(rank, world_size, q_input, q_output):
     model = TGNN(dim_node, dim_edge, **model_config, num_nodes=num_nodes,
                     memory_device=device, memory_shared=args.distributed)
     model.to(device)
-    
 
     sampler = TemporalSampler(dgraph, **model_config)
 
-    # model = torch.nn.parallel.DistributedDataParallel(
-    #     model, device_ids=[args.local_rank], find_unused_parameters=False)
+    # if args.distributed:
+        # model = torch.nn.parallel.DistributedDataParallel(
+        #     model, device_ids=[args.local_rank], find_unused_parameters=True)
 
     pinned_nfeat_buffs, pinned_efeat_buffs = get_pinned_buffers(
         model_config['fanouts'], model_config['num_snapshots'], batch_size,
@@ -253,7 +238,7 @@ def main(rank, world_size, q_input, q_output):
                                         num_nodes, num_edges, device,
                                         node_feats, edge_feats,
                                         dim_node, dim_edge,
-                                        pinned_nfeat_buffs, 
+                                        pinned_nfeat_buffs,
                                         pinned_efeat_buffs,
                                         None,
                                         False)
@@ -272,29 +257,29 @@ def main(rank, world_size, q_input, q_output):
     criterion = torch.nn.BCEWithLogitsLoss()
 
     best_e = train(train_loader, val_loader, sampler,
-                   model, optimizer, criterion, cache, device, q_input, q_output)
+                   model, optimizer, criterion, cache, device)
 
     logging.info('Loading model at epoch {}...'.format(best_e))
 
     ap, auc = evaluate(test_loader, sampler, model,
-                       criterion, cache, device, q_input, q_output)
-    
+                       criterion, cache, device)
     metrics = torch.tensor([ap, auc], device=device)
-    torch.distributed.all_reduce(metrics)
+    dist.all_reduce(metrics)
     metrics /= args.world_size
     ap, auc = metrics.tolist()
     if args.rank == 0:
         logging.info('Test ap:{:4f}  test auc:{:4f}'.format(ap, auc))
 
-    torch.distributed.barrier()
-
 
 def train(train_loader, val_loader, sampler, model, optimizer, criterion,
-          cache, device, q_input, q_output):
+          cache, device):
+    global training
+    training = True
     best_ap = 0
     best_e = 0
     epoch_time_sum = 0
     early_stopper = EarlyStopMonitor()
+    tensor = torch.empty(0).cuda()
 
     next_data = None
 
@@ -303,24 +288,24 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         mfgs = sampler.sample(target_nodes, ts)
         next_data = (mfgs, eid)
 
-    logging.info('Start training...')
-    torch.distributed.barrier()
+    if args.local_rank == 0:
+        gpu_load_thread = threading.Thread(target=gpu_load)
+        gpu_load_thread.start()
 
-    sign = True
-    groups = []
-    for i in range(args.world_size):
-        g = dist.new_group([i, (i+1)%args.world_size])
-        groups.append(g)
+    logging.info('Start training...')
+    dist.barrier()
+    i = 0
     for e in range(args.epoch):
         model.train()
         cache.reset()
         if e > 0:
-            model.reset()
+            model.module.reset()
         total_loss = 0
         cache_edge_ratio_sum = 0
         cache_node_ratio_sum = 0
         total_sampling_time = 0
         total_feature_fetch_time = 0
+        total_memory_fetch_time = 0
         total_memory_update_time = 0
         total_memory_write_back_time = 0
         total_model_train_time = 0
@@ -329,22 +314,17 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         epoch_time_start = time.time()
 
         train_iter = iter(train_loader)
-        iterations = int(len(train_iter))
-
         target_nodes, ts, eid = next(train_iter)
         mfgs = sampler.sample(target_nodes, ts)
         next_data = (mfgs, eid)
 
         sampling_thread = None
+
         flag = False
         iteration_now = args.rank
 
-        i = 0 
-        dist.barrier()
-        global tb
-        tb = time.perf_counter()
         while True:
-            print(f'{iteration_now}, hello!')
+            # print(i)
             if sampling_thread is not None:
                 sampling_thread.join()
 
@@ -355,8 +335,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             try:
                 next_target_nodes, next_ts, next_eid = next(train_iter)
             except StopIteration:
-                print(iterations)
-                print(f'debug {iteration_now}')
                 break
             sampling_thread = threading.Thread(target=sampling, args=(
                 next_target_nodes, next_ts, next_eid))
@@ -369,68 +347,96 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 mfgs, eid)
             total_feature_fetch_time += time.time() - feature_start_time
 
-            update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
-
             if args.rank!=0 or flag:
-                q_input.get()
+                request = dist.irecv(tensor, (args.rank-1+args.world_size)%args.world_size)
+                request.wait()
 
-            memory_update_start_time = time.time()
+            # update memory
+
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
-            total_memory_update_time += time.time() - memory_update_start_time
-
-            if iteration_now+1 != int(len(train_loader)):
-                q_output.put(sign)
+                update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
+                memory_fetch_start_time = time.time()
+                with torch.no_grad():
+                    updated_memory = model.module.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                total_memory_fetch_time += time.time() - memory_fetch_start_time
             
-            model_train_start_time = time.time()
+            
+            if iteration_now+1 != iterations:
+                dist.isend(tensor, (args.rank+1)%args.world_size)
+
+            # predict and calculate the loss
+
             if args.use_memory:
                 b = mfgs[0][0]
-                input = model.memory.prepare_input(b, update_length)
-                model.get_updated_memory(b, updated_memory, **input)
-            # Train
+                update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
+                model_train_start_time = time.time()
+                model.module.memory.prepare_input(b)
+                model.module.get_updated_memory(b, updated_memory, update_length)
             optimizer.zero_grad()
             pred_pos, pred_neg = model(mfgs)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))
             loss += criterion(pred_neg, torch.zeros_like(pred_neg))
             total_loss += float(loss) * num_target_nodes
             loss.backward()
-            # # transfer
-            if flag:
-               sends_thread.join() 
-            if args.rank!=0 or flag:
-                src = (args.rank-1+args.world_size)%args.world_size
-                idx = src
-                params = [param.data for param in model.parameters()]
-                recv(params, src, groups[idx])
-            flag = True
 
-            # # update the model
+            if args.rank!=0 or flag:
+                flag = True
+                params = [param.data for param in model.parameters()]
+                ops = []
+                for param in params:
+                    ops.append(dist.P2POp(dist.irecv, param, (args.rank-1+args.world_size)%args.world_size))
+                reqs = dist.batch_isend_irecv(ops)
+                for req in reqs:
+                    req.wait()
+                    
+            # update the model
+            
             optimizer.step()
             total_model_train_time += time.time() - model_train_start_time
 
-            if iteration_now+1 != int(len(train_loader)):
-                params = [param.data.clone() for param in model.parameters()]
-                dst = (args.rank+1)%args.world_size
-                idx = args.rank
-                sends_thread = threading.Thread(target=send, args=(params, dst, groups[idx]))
-                sends_thread.start()
+            if iteration_now+1 != iterations:
+                params = [param.data for param in model.parameters()]
+                ops = []
+                for param in params:
+                    ops.append(dist.P2POp(dist.isend, param, (args.rank+1)%args.world_size))
+                dist.batch_isend_irecv(ops)
             iteration_now += args.world_size
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
-            # total_samples += num_target_nodes
+            total_samples += num_target_nodes
             i += 1
 
+            if (i+1) % args.print_freq == 0:
+
+                # if args.distributed:
+                #     metrics = torch.tensor([total_loss, cache_edge_ratio_sum,
+                #                             cache_node_ratio_sum, total_samples,
+                #                             total_sampling_time, total_feature_fetch_time,
+                #                             total_memory_update_time,
+                #                             total_memory_write_back_time,
+                #                             total_model_train_time
+                #                             ]).to(device)
+                #     dist.all_reduce(metrics)
+                #     metrics /= args.world_size
+                #     total_loss, cache_edge_ratio_sum, cache_node_ratio_sum, \
+                #         total_samples, total_sampling_time, total_feature_fetch_time, \
+                #         total_memory_update_time, total_memory_write_back_time, \
+                #         total_model_train_time = metrics.tolist()
+                if args.rank == 0:
+                    logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
+                        train_loader)/args.world_size), total_samples * args.world_size / (time.time() - epoch_time_start), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, time.time() - epoch_time_start))
         epoch_time = time.time() - epoch_time_start
         epoch_time_sum += epoch_time
+
         # Validation
         val_start = time.time()
         val_ap, val_auc = evaluate(
-            val_loader, sampler, model, criterion, cache, device, q_input, q_output)
+            val_loader, sampler, model, criterion, cache, device)
 
         val_res = torch.tensor([val_ap, val_auc]).to(device)
-        torch.distributed.all_reduce(val_res)
+        dist.all_reduce(val_res)
         val_res /= args.world_size
         val_ap, val_auc = val_res[0].item(), val_res[1].item()
 
@@ -443,7 +449,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                                 total_memory_update_time,
                                 total_memory_write_back_time,
                                 total_model_train_time]).to(device)
-        torch.distributed.all_reduce(metrics)
+        dist.all_reduce(metrics)
         metrics /= args.world_size
         val_ap, val_auc, cache_edge_ratio_sum, cache_node_ratio_sum, \
             total_samples, total_sampling_time, total_feature_fetch_time, \
@@ -451,56 +457,33 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             total_model_train_time = metrics.tolist()
 
         if args.rank == 0:
-            logging.info("Epoch {:d}/{:d} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s".format(
+            logging.info("Epoch {:d}/{:d} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s".format(
 
-                e + 1, args.epoch, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time))
+                e + 1, args.epoch, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time))
 
         if args.rank == 0 and val_ap > best_ap:
             best_e = e + 1
             best_ap = val_ap
+            model_to_save = model.module
             logging.info(
                 "Best val AP: {:.4f} & val AUC: {:.4f}".format(val_ap, val_auc))
 
     if args.rank == 0:
         logging.info('Avg epoch time: {}'.format(epoch_time_sum / args.epoch))
 
-    torch.distributed.barrier()
+    dist.barrier()
+
+    if args.local_rank == 0:
+        training = False
+        gpu_load_thread.join()
 
     return best_e
 
-tb = 0
-
-def send(tensors: list, target: int, group: object = None):
-    # print(f'send: {args.rank} to {target} at {time.perf_counter()-tb:.6f}')
-    ops = []
-    for tensor in tensors:
-        ops.append(dist.P2POp(dist.isend, tensor, target, group))
-    reqs = dist.batch_isend_irecv(ops)
-    for req in reqs:
-        req.wait()
-    # print(f'send finished: {args.rank}')
-    
-def recv(tensors: list, target: int, group: object = None):
-    # print(f'recv: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
-    ops = []
-    for tensor in tensors:
-        ops.append(dist.P2POp(dist.irecv, tensor, target, group))
-    reqs = dist.batch_isend_irecv(ops)
-    for req in reqs:
-        req.wait()
-    # print(f'recv finished: {args.rank}')
 
 if __name__ == '__main__':
-    queues = []
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12345'
-    world_size = 2
-    for i in range(world_size):
-        q = Queue()
-        queues.append(q)
-    for i in range(world_size):
-        p = Process(target=main, args=(i, world_size, queues[i], queues[(i+1)%world_size]))
-        p.start()
+
+    main()
+    
     # powered by tyf
     # 🤔️ = 1
     # 😄 = 🤔️ + 📖
