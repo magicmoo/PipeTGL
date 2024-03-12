@@ -22,9 +22,10 @@ from tqdm import tqdm
 
 import gnnflow.cache as caches
 from config import get_default_config
-from gnnflow.data import (DistributedBatchSampler, EdgePredictionDataset,
+from gnnflow.data import (EdgePredictionDataset,
                           RandomStartBatchSampler, default_collate_ndarray)
 from modules.tgnn import TGNN
+from modules.sampler import DistributedBatchSampler
 from gnnflow.models.dgnn import DGNN
 from gnnflow.models.gat import GAT
 from gnnflow.models.graphsage import SAGE
@@ -49,13 +50,13 @@ parser.add_argument("--epoch", help="maximum training epoch",
                     type=int, default=50)
 parser.add_argument("--lr", help='learning rate', type=float, default=0.0001)
 parser.add_argument("--num-workers", help="num workers for dataloaders",
-                    type=int, default=8)
+                    type=int, default=1)
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
-                    type=int, default=8)
+                    type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
                     type=int, default=100)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ingestion-batch-size", type=int, default=1000,
+parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
 # parser.add_argument("--cache", choices=cache_names, help="feature cache:" +
 #                     '|'.join(cache_names))
@@ -309,7 +310,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     logging.info('Start training...')
     if args.distributed:
         torch.distributed.barrier()
-    # file = open('/home/liujun/log/PipeTGNN.log', 'w')
+    auc_list, tb_list = [0], [0]
     for e in range(args.epoch):
         model.train()
         cache.reset()
@@ -340,6 +341,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         i = 0  
         while True:
+            sample_start_time = time.perf_counter()
             if sampling_thread is not None:
                 sampling_thread.join()
 
@@ -354,10 +356,11 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             sampling_thread = threading.Thread(target=sampling, args=(
                 next_target_nodes, next_ts, next_eid))
             sampling_thread.start()
+            total_sampling_time += time.perf_counter() - sample_start_time
 
             # Feature
-            mfgs_to_cuda(mfgs, device)
             feature_start_time = time.time()
+            mfgs_to_cuda(mfgs, device)
             mfgs = cache.fetch_feature(
                 mfgs, eid)
             total_feature_fetch_time += time.time() - feature_start_time
@@ -455,6 +458,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             logging.info("Epoch {:d}/{:d} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s".format(
 
                 e + 1, args.epoch, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time))
+            auc_list.append(val_auc)
+            tb_list.append(epoch_time+tb_list[-1])
 
         if args.rank == 0 and val_ap > best_ap:
             best_e = e + 1
@@ -468,6 +473,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
     if args.rank == 0:
         logging.info('Avg epoch time: {}'.format(epoch_time_sum / args.epoch))
+        print(auc_list)
+        print(tb_list)
 
     if args.distributed:
         torch.distributed.barrier()

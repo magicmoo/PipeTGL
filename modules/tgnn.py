@@ -8,6 +8,7 @@ import sys
 import os
 from modules.memory import Memory
 from modules.memory_updater import GRUMemeoryUpdater
+import time
 
 
 class TGNN(torch.nn.Module):
@@ -136,6 +137,7 @@ class TGNN(torch.nn.Module):
         return self.edge_predictor(embed)
     
     def update_memory_and_mail(self, b: DGLBlock, length: int, edge_feats: Optional[torch.Tensor]=None):
+        t1 = time.perf_counter()
         device = b.device
         all_nodes = b.srcdata['ID'][:length]
         all_nodes_unique, inv = torch.unique(
@@ -152,11 +154,16 @@ class TGNN(torch.nn.Module):
         mail_ts = mail_ts[inv]
         updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
         new_memory = updated_memory.clone().detach()
-
+        
         with torch.no_grad():
-            last_updated_nid = all_nodes.to(self.memory.device)
-            last_updated_memory = new_memory.to(self.memory.device)
-            last_updated_ts = mail_ts.to(self.memory.device)
+            # last_updated_nid = all_nodes.to(self.memory.device)
+            # last_updated_memory = new_memory.to(self.memory.device)
+            # last_updated_ts = mail_ts.to(self.memory.device)
+            last_updated_nid = all_nodes
+            last_updated_memory = new_memory
+            last_updated_ts = mail_ts
+
+            t2 = time.perf_counter()
 
             # genereate mail
             split_chunks = 2
@@ -165,9 +172,9 @@ class TGNN(torch.nn.Module):
                 edge_feats = torch.zeros(
                     last_updated_nid.shape[0] // split_chunks, self.dim_edge,
                     device=self.memory.device)
-
-
-            edge_feats = edge_feats.to(self.memory.device)
+            
+            # edge_feats = edge_feats.to(self.memory.device)
+            edge_feats = edge_feats.to(device)
 
             src, dst, *_ = last_updated_nid.tensor_split(split_chunks)
             mem_src, mem_dst, *_ = last_updated_memory.tensor_split(split_chunks)
@@ -179,6 +186,8 @@ class TGNN(torch.nn.Module):
                 [src.unsqueeze(1), dst.unsqueeze(1)], dim=1).reshape(-1)
             mail_ts = last_updated_ts[:len(nid)]
 
+            t3 = time.perf_counter()
+
             # find unique nid to update mailbox
             uni, inv = torch.unique(nid, return_inverse=True)
             perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
@@ -187,11 +196,13 @@ class TGNN(torch.nn.Module):
             mail = mail[perm]
             mail_ts = mail_ts[perm]
 
+            t4 = time.perf_counter()
+
             # prepare mem
             num_true_src_dst = last_updated_nid.shape[0] // split_chunks * 2
-            nid = last_updated_nid[:num_true_src_dst].to(self.memory.device)
-            memory = last_updated_memory[:num_true_src_dst].to(self.memory.device)
-            ts = last_updated_ts[:num_true_src_dst].to(self.memory.device)
+            nid = last_updated_nid[:num_true_src_dst]
+            memory = last_updated_memory[:num_true_src_dst]
+            ts = last_updated_ts[:num_true_src_dst]
             # the nid of mem and mail is different
             # after unique they are the same but perm is still different
             uni, inv = torch.unique(nid, return_inverse=True)
@@ -211,11 +222,16 @@ class TGNN(torch.nn.Module):
                 self.kvstore_client.push(nid, all_mem, mode='memory')
             else:
                 # update mailbox first
-                self.memory.mailbox[nid] = mail
-                self.memory.mailbox_ts[nid] = mail_ts
+                self.memory.mailbox[nid] = mail.to(self.memory.device)
+                self.memory.mailbox_ts[nid] = mail_ts.to(self.memory.device)
                 # update mem
-                self.memory.node_memory[nid] = mem
-                self.memory.node_memory_ts[nid] = mem_ts
+                self.memory.node_memory[nid] = mem.to(self.memory.device)
+                self.memory.node_memory_ts[nid] = mem_ts.to(self.memory.device)
+            t5 = time.perf_counter()
+            # print('1 ', t2-t1)
+            # print('2 ', t3-t2)
+            # print('3 ', t4-t3)
+            # print('4 ', t5-t4)
         return updated_memory
 
     def get_updated_memory(self, b: DGLBlock, updated_memory: torch.tensor, mem, mail, mem_ts, mail_ts):
