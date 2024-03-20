@@ -15,13 +15,48 @@ def get_default_config(model: str, dataset: str):
         Default configuration for the model and dataset.
     """
     model, dataset = model.lower(), dataset.lower()
-    assert model in ["tgnn"] and dataset in [
+    assert model in ["tgnn", "tgn"] and dataset in [
         "wiki", "reddit", "mooc", "lastfm", "gdelt", "mag"], "Invalid model or dataset."
 
     mod = sys.modules[__name__]
     return getattr(
         mod, f"_{model}_default_config"), getattr(
         mod, f"_{dataset}_default_config")
+
+
+_tgn_default_config = {
+    "dropout": 0.2,
+    "att_head": 2,
+    "att_dropout": 0.2,
+    "num_layers": 1,
+    "fanouts": [10],
+    "sample_strategy": "recent",
+    "num_snapshots": 1,
+    "snapshot_time_window": 0,
+    "prop_time": False,
+    "use_memory": True,
+    "dim_time": 100,
+    "dim_embed": 100,
+    "dim_memory": 100,
+    "batch_size": 4000
+}
+
+_tgnn_default_config = {
+    "dropout": 0.2,
+    "att_head": 2,
+    "att_dropout": 0.2,
+    "num_layers": 1,
+    "fanouts": [10],
+    "sample_strategy": "recent",
+    "num_snapshots": 1,
+    "snapshot_time_window": 0,
+    "prop_time": False,
+    "use_memory": True,
+    "dim_time": 100,
+    "dim_embed": 100,
+    "dim_memory": 100,
+    "batch_size": 4000
+}
 
 _tgnn_default_config = {
     "dropout": 0.2,

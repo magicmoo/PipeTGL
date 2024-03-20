@@ -143,10 +143,14 @@ class TGNN(torch.nn.Module):
         all_nodes_unique, inv = torch.unique(
             all_nodes.cpu(), return_inverse=True)
         
+        t3 = time.perf_counter()
+        
         mem = self.memory.node_memory[all_nodes_unique].to(device)
         mem_ts = self.memory.node_memory_ts[all_nodes_unique].to(device)
         mail = self.memory.mailbox[all_nodes_unique].to(device)
         mail_ts = self.memory.mailbox_ts[all_nodes_unique].to(device)
+
+        t4 = time.perf_counter()
 
         mem = mem[inv]
         mem_ts = mem_ts[inv]
@@ -162,8 +166,6 @@ class TGNN(torch.nn.Module):
             last_updated_nid = all_nodes
             last_updated_memory = new_memory
             last_updated_ts = mail_ts
-
-            t2 = time.perf_counter()
 
             # genereate mail
             split_chunks = 2
@@ -186,8 +188,6 @@ class TGNN(torch.nn.Module):
                 [src.unsqueeze(1), dst.unsqueeze(1)], dim=1).reshape(-1)
             mail_ts = last_updated_ts[:len(nid)]
 
-            t3 = time.perf_counter()
-
             # find unique nid to update mailbox
             uni, inv = torch.unique(nid, return_inverse=True)
             perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
@@ -195,8 +195,6 @@ class TGNN(torch.nn.Module):
             nid = nid[perm]
             mail = mail[perm]
             mail_ts = mail_ts[perm]
-
-            t4 = time.perf_counter()
 
             # prepare mem
             num_true_src_dst = last_updated_nid.shape[0] // split_chunks * 2
@@ -211,6 +209,8 @@ class TGNN(torch.nn.Module):
             nid = nid[perm]
             mem = memory[perm]
             mem_ts = ts[perm]
+
+            t5 = time.perf_counter()
 
             if self.memory.partition:
                 # cat the memory first
@@ -227,10 +227,10 @@ class TGNN(torch.nn.Module):
                 # update mem
                 self.memory.node_memory[nid] = mem.to(self.memory.device)
                 self.memory.node_memory_ts[nid] = mem_ts.to(self.memory.device)
-            t5 = time.perf_counter()
+            t2 = time.perf_counter()
             # print('1 ', t2-t1)
-            # print('2 ', t3-t2)
-            # print('3 ', t4-t3)
+            # print('2 ', t4-t3)
+            # print('3 ', t2-t5)
             # print('4 ', t5-t4)
         return updated_memory
 
