@@ -352,12 +352,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         total_samples = 0
 
         epoch_time_start = time.time()
-        ttt = time.perf_counter()
 
         train_iter = iter(train_loader)
-        
         target_nodes, ts, eid = next(train_iter)
-        ttt = time.perf_counter() - ttt
         mfgs = sampler.sample(target_nodes, ts)
         next_data = (mfgs, eid)
 
@@ -371,6 +368,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         tb = time.perf_counter()
         sends_thread1 = None
         sends_thread2 = None
+
+        ttt = 0
         
         while True:
             sample_start_time = time.perf_counter()
@@ -400,6 +399,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
 
             memory_update_start_time = time.perf_counter()
+            
+            ttt = time.perf_counter()
 
             if sends_thread1 != None:
                sends_thread1.join() 
@@ -408,6 +409,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 idx = src
                 recv(None, src, groups[idx])
             # print(f'hello, {iteration_now}')
+                
+            ttt = time.perf_counter() - ttt
 
             if args.use_memory:
                 b = mfgs[0][0]
@@ -434,20 +437,27 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             total_loss += float(loss) * num_target_nodes
             loss.backward()
 
+            total_model_train_time += time.perf_counter() - model_train_start_time
+            model_update_start_time = time.perf_counter()
+
             # transfer
             if sends_thread2 != None:
                sends_thread2.join() 
-            pull_model(model, model_data)
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src + args.world_size
                 recv(None, src, groups[idx])
             flag = True
 
+            pull_model(model, model_data)
+
             # update the model
             optimizer.step()
             
             push_model(model, model_data)
+
+            total_model_update_time = time.perf_counter() - model_update_start_time
+
             if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
@@ -455,8 +465,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 sends_thread2 = threading.Thread(target=send, args=(None, dst, groups[idx]))
                 sends_thread2.start()
             iteration_now += args.world_size
-
-            total_model_train_time += time.perf_counter() - model_train_start_time
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
@@ -483,18 +491,19 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                                 total_sampling_time, total_feature_fetch_time,
                                 total_memory_update_time,
                                 total_memory_write_back_time,
-                                total_model_train_time]).to(device)
+                                total_model_train_time,
+                                total_model_update_time]).to(device)
         torch.distributed.all_reduce(metrics)
         metrics /= args.world_size
         val_ap, val_auc, cache_edge_ratio_sum, cache_node_ratio_sum, \
             total_samples, total_sampling_time, total_feature_fetch_time, \
             total_memory_update_time, total_memory_write_back_time, \
-            total_model_train_time = metrics.tolist()
+            total_model_train_time, total_model_update_time = metrics.tolist()
 
         if args.rank == 0:
-            logging.info("Epoch {:d}/{:d} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s".format(
+            logging.info("Epoch {:d}/{:d} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s".format(
 
-                e + 1, args.epoch, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time))
+                e + 1, args.epoch, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time, total_model_update_time))
             print(ttt)
             auc_list.append(val_auc)
             tb_list.append(epoch_time+tb_list[-1])
