@@ -406,12 +406,13 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src
                 recv(None, src, groups[idx])
+            # print(f'hello, {iteration_now}')
 
             if args.use_memory:
                 b = mfgs[0][0]
                 updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
-            if iteration_now+3 != int(len(train_loader)):
+            if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank
                 sends_thread1 = threading.Thread(target=send, args=(None, dst, groups[idx]))
@@ -446,7 +447,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             optimizer.step()
             
             push_model(model, model_data)
-            if iteration_now+3 != int(len(train_loader)):
+            if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
                 # send(params, dst, groups[idx])
@@ -528,9 +529,10 @@ def pull_model(model, model_data):
 def send(tensors: list, target: int, group: object = None):
     
     if tensors == None:
-        # print(f'send1: {args.rank} at {time.perf_counter()-tb:.6f}')
-        tensor = torch.empty(0).to(f'cuda:{args.local_rank}')
-        dist.send(tensor, target, group)
+        tensor = torch.tensor([args.local_rank]).to(f'cuda:{args.local_rank}')
+        # print(f'send1: {args.rank} {tensor}')
+        req = dist.isend(tensor, target, group)
+        req.wait()
         # print(f'send1 finished: {args.rank}')
     else:
         # print(f'send2: {args.rank} at {time.perf_counter()-tb:.6f}')
@@ -546,9 +548,14 @@ def send(tensors: list, target: int, group: object = None):
 def recv(tensors: list, target: int, group: object = None):
     if tensors == None:
         # print(f'recv1: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
-        tensor = torch.empty(0).to(f'cuda:{args.local_rank}')
-        dist.recv(tensor, target, group)
-        # print(f'recv1 finished: {args.rank}')
+        tensor = torch.tensor([args.local_rank]).to(f'cuda:{args.local_rank}')
+        req = dist.irecv(tensor, target, group)
+        req.wait()
+        if tensor.sum() == target:
+            return True
+        else:
+            return False
+        # print(f'recv1 finished: {args.rank}, {tensor}')
     else:
         # print(f'recv2: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
         ops = []
