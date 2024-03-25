@@ -416,7 +416,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             mfgs = cache.fetch_feature(
                 mfgs, eid)
             total_feature_fetch_time += time.time() - feature_start_time
-
+            # b = mfgs[0][0]
+            # print(f'sample {b.srcdata["ID"].shape[0]} nodes from 1500 nodes')
             if args.use_memory:
                 b = mfgs[0][0]
                 if args.distributed:
