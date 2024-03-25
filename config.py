@@ -35,10 +35,10 @@ _tgn_default_config = {
     "snapshot_time_window": 0,
     "prop_time": False,
     "use_memory": True,
-    "dim_time": 100,
-    "dim_embed": 100,
-    "dim_memory": 100,
-    "batch_size": 1000
+    "dim_time": 128,
+    "dim_embed": 128,
+    "dim_memory": 128,
+    "batch_size": 4000
 }
 
 _tgnn_default_config = {
@@ -52,11 +52,12 @@ _tgnn_default_config = {
     "snapshot_time_window": 0,
     "prop_time": False,
     "use_memory": True,
-    "dim_time": 100,
-    "dim_embed": 100,
-    "dim_memory": 100,
-    "batch_size": 1000
+    "dim_time": 128,
+    "dim_embed": 128,
+    "dim_memory": 128,
+    "batch_size": 4000
 }
+
 
 _tgnn_default_config = {
     "dropout": 0.2,

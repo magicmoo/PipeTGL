@@ -320,9 +320,12 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
     next_data = None
 
-    def sampling(target_nodes, ts, eid):
+    def samplingAndFetch(target_nodes, ts, eid, device):
         nonlocal next_data
         mfgs = sampler.sample(target_nodes, ts)
+        mfgs = mfgs_to_cuda(mfgs, device)
+        mfgs = cache.fetch_feature(
+            mfgs, eid)
         next_data = (mfgs, eid)
 
     logging.info('Start training...')
@@ -357,6 +360,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         train_iter = iter(train_loader)
         target_nodes, ts, eid = next(train_iter)
         mfgs = sampler.sample(target_nodes, ts)
+        mfgs = mfgs_to_cuda(mfgs, device)
+        mfgs = cache.fetch_feature(mfgs, eid)
         next_data = (mfgs, eid)
 
         sampling_thread = None
@@ -385,31 +390,24 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 next_target_nodes, next_ts, next_eid = next(train_iter)
             except StopIteration:
                 break
-            sampling_thread = threading.Thread(target=sampling, args=(
-                next_target_nodes, next_ts, next_eid))
+            sampling_thread = threading.Thread(target=samplingAndFetch, args=(
+                next_target_nodes, next_ts, next_eid, device))
             sampling_thread.start()
             total_sampling_time += time.perf_counter() - sample_start_time
 
             # Feature
-            feature_start_time = time.perf_counter()
-            mfgs_to_cuda(mfgs, device)
-            mfgs = cache.fetch_feature(
-                mfgs, eid)
-            total_feature_fetch_time += time.perf_counter() - feature_start_time
 
             update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
 
             memory_update_start_time = time.perf_counter()
-            
-            tmp = time.perf_counter()
 
+            tmp = time.perf_counter()
             if sends_thread1 != None:
                sends_thread1.join() 
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src
                 recv(None, src, groups[idx])
-                
             ttt += time.perf_counter() - tmp
 
             if args.use_memory:
@@ -458,13 +456,15 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             
             push_model(model, model_data)
 
-            total_model_update_time += time.perf_counter() - model_update_start_time
-
             if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
+                # send(params, dst, groups[idx])
                 sends_thread2 = threading.Thread(target=send, args=(None, dst, groups[idx]))
                 sends_thread2.start()
+            
+            total_model_update_time += time.perf_counter() - model_update_start_time
+            
             iteration_now += args.world_size
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
