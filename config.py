@@ -38,7 +38,7 @@ _tgn_default_config = {
     "dim_time": 128,
     "dim_embed": 128,
     "dim_memory": 128,
-    "batch_size": 4000
+    "batch_size": 400
 }
 
 _tgnn_default_config = {
@@ -55,7 +55,7 @@ _tgnn_default_config = {
     "dim_time": 128,
     "dim_embed": 128,
     "dim_memory": 128,
-    "batch_size": 4000
+    "batch_size": 400
 }
 
 

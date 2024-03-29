@@ -442,13 +442,13 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             # transfer
             tmp = time.perf_counter()
-            # if sends_thread2 != None:
-            #    sends_thread2.join() 
-            # if args.rank!=0 or flag:
-            #     src = (args.rank-1+args.world_size)%args.world_size
-            #     idx = src + args.world_size
-            #     params = [param.data for param in model.parameters()]
-            #     recv(None, src, groups[idx])
+            if sends_thread2 != None:
+               sends_thread2.join() 
+            if args.rank!=0 or flag:
+                src = (args.rank-1+args.world_size)%args.world_size
+                idx = src + args.world_size
+                params = [param.data for param in model.parameters()]
+                recv(params, src, groups[idx])
             flag = True
             ttt += time.perf_counter() - tmp
 
@@ -457,14 +457,14 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             total_model_update_time += time.perf_counter() - model_update_start_time
 
-            # if iteration_now+1+args.world_size != int(len(train_loader)):
-            #     dst = (args.rank+1)%args.world_size
-            #     idx = args.rank + args.world_size
-            #     params = [param.data.clone() for param in model.parameters()]
-            #     sends_thread2 = threading.Thread(target=send, args=(None, dst, groups[idx]))
-            #     sends_thread2.start()
-            # else:
-            #     push_model(model, model_data)
+            if iteration_now+1+args.world_size != int(len(train_loader)):
+                dst = (args.rank+1)%args.world_size
+                idx = args.rank + args.world_size
+                params = [param.data.clone() for param in model.parameters()]
+                sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
+                sends_thread2.start()
+            else:
+                push_model(model, model_data)
             iteration_now += args.world_size
 
             cache_edge_ratio_sum += cache.cache_edge_ratio

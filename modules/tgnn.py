@@ -146,8 +146,9 @@ class TGNN(torch.nn.Module):
         t3 = time.perf_counter()
         
         mem = self.memory.node_memory[all_nodes_unique].to(device)
-        mem_ts = self.memory.node_memory_ts[all_nodes_unique].to(device)
         mail = self.memory.mailbox[all_nodes_unique].to(device)
+        
+        mem_ts = self.memory.node_memory_ts[all_nodes_unique].to(device)
         mail_ts = self.memory.mailbox_ts[all_nodes_unique].to(device)
 
         t4 = time.perf_counter()

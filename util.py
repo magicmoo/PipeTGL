@@ -7,10 +7,49 @@ from typing import List, Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
-import torch.distributed
+import torch.distributed as dist
 from dgl.heterograph import DGLBlock
 from dgl.utils.shared_mem import create_shared_mem_array, get_shared_mem_array
 
+def send(tensors: list, rank: int, target: int, group: object = None):
+    
+    if tensors == None:
+        tensor = torch.tensor([rank]).to(f'cuda:{rank}')
+        # print(f'send1: {args.rank} {tensor}')
+        req = dist.isend(tensor, target, group)
+        req.wait()
+        # print(f'send1 finished: {args.rank}')
+    else:
+        # print(f'send2: {args.rank} at {time.perf_counter()-tb:.6f}')
+        ops = []
+        for tensor in tensors:
+            ops.append(dist.P2POp(dist.isend, tensor, target, group))
+        reqs = dist.batch_isend_irecv(ops)
+        for req in reqs:
+            req.wait()
+        # print(f'send2 finished: {args.rank}')
+    
+    
+def recv(tensors: list, rank: int, target: int, group: object = None):
+    if tensors == None:
+        # print(f'recv1: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
+        tensor = torch.tensor([rank]).to(f'cuda:{rank}')
+        req = dist.irecv(tensor, target, group)
+        req.wait()
+        if tensor.sum() == target:
+            return True
+        else:
+            return False
+        # print(f'recv1 finished: {args.rank}, {tensor}')
+    else:
+        # print(f'recv2: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
+        ops = []
+        for tensor in tensors:
+            ops.append(dist.P2POp(dist.irecv, tensor, target, group))
+        reqs = dist.batch_isend_irecv(ops)
+        for req in reqs:
+            req.wait()
+        # print(f'recv2 finished: {args.rank}')
 
 def load_feat(dataset: str, data_dir: Optional[str] = None,
               shared_memory: bool = False, local_rank: int = 0, local_world_size: int = 1,

@@ -452,7 +452,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             ttt += time.perf_counter() - tmp
 
             pull_model(model, model_data)
-
+            
             # update the model
             optimizer.step()
             
@@ -528,7 +528,7 @@ tb = 0
 def push_model(model, model_data):
     i = 0
     for param in model.parameters():
-        model_data[i][:] = param.data.clone()[:].to('cpu')
+        model_data[i][:] = param.data[:].to('cpu')
         i += 1
 
 def pull_model(model, model_data):
