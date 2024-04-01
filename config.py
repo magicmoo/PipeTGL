@@ -38,7 +38,7 @@ _tgn_default_config = {
     "dim_time": 128,
     "dim_embed": 128,
     "dim_memory": 128,
-    "batch_size": 400
+    "batch_size": 4000
 }
 
 _tgnn_default_config = {
@@ -55,24 +55,6 @@ _tgnn_default_config = {
     "dim_time": 128,
     "dim_embed": 128,
     "dim_memory": 128,
-    "batch_size": 400
-}
-
-
-_tgnn_default_config = {
-    "dropout": 0.2,
-    "att_head": 2,
-    "att_dropout": 0.2,
-    "num_layers": 1,
-    "fanouts": [10],
-    "sample_strategy": "recent",
-    "num_snapshots": 1,
-    "snapshot_time_window": 0,
-    "prop_time": False,
-    "use_memory": True,
-    "dim_time": 100,
-    "dim_embed": 100,
-    "dim_memory": 100,
     "batch_size": 4000
 }
 

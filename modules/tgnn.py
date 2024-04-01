@@ -136,34 +136,27 @@ class TGNN(torch.nn.Module):
             return embed
         return self.edge_predictor(embed)
     
-    def update_memory_and_mail(self, b: DGLBlock, length: int, edge_feats: Optional[torch.Tensor]=None):
-        t1 = time.perf_counter()
+    def update_memory_and_mail(self, b: DGLBlock,  length: int, mem: torch.tensor = None, mail: torch.tensor = None, 
+                               push_msg: torch.tensor = None, send_msg: torch.tensor = None, edge_feats: Optional[torch.Tensor] = None):
         device = b.device
         all_nodes = b.srcdata['ID'][:length]
         all_nodes_unique, inv = torch.unique(
             all_nodes.cpu(), return_inverse=True)
-        
-        t3 = time.perf_counter()
-        
-        mem = self.memory.node_memory[all_nodes_unique].to(device)
-        mail = self.memory.mailbox[all_nodes_unique].to(device)
-        
+        if mem is None:
+            mem = self.memory.node_memory[all_nodes_unique].to(device)
+        if mail is None:
+            mail = self.memory.mailbox[all_nodes_unique].to(device)
         mem_ts = self.memory.node_memory_ts[all_nodes_unique].to(device)
         mail_ts = self.memory.mailbox_ts[all_nodes_unique].to(device)
 
-        t4 = time.perf_counter()
-
         mem = mem[inv]
-        mem_ts = mem_ts[inv]
         mail = mail[inv]
+        mem_ts = mem_ts[inv]
         mail_ts = mail_ts[inv]
         updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
         new_memory = updated_memory.clone().detach()
         
         with torch.no_grad():
-            # last_updated_nid = all_nodes.to(self.memory.device)
-            # last_updated_memory = new_memory.to(self.memory.device)
-            # last_updated_ts = mail_ts.to(self.memory.device)
             last_updated_nid = all_nodes
             last_updated_memory = new_memory
             last_updated_ts = mail_ts
@@ -175,8 +168,7 @@ class TGNN(torch.nn.Module):
                 edge_feats = torch.zeros(
                     last_updated_nid.shape[0] // split_chunks, self.dim_edge,
                     device=self.memory.device)
-            
-            # edge_feats = edge_feats.to(self.memory.device)
+
             edge_feats = edge_feats.to(device)
 
             src, dst, *_ = last_updated_nid.tensor_split(split_chunks)
@@ -211,35 +203,29 @@ class TGNN(torch.nn.Module):
             mem = memory[perm]
             mem_ts = ts[perm]
 
-            t5 = time.perf_counter()
-
             if self.memory.partition:
                 # cat the memory first
-                all_mem = torch.cat((mem,
-                                    mem_ts.unsqueeze(dim=1),
-                                    mail,
-                                    mail_ts.unsqueeze(dim=1)),
-                                    dim=1)
-                self.kvstore_client.push(nid, all_mem, mode='memory')
+                pass
             else:
-                # update mailbox first
-                self.memory.mailbox[nid] = mail.to(self.memory.device)
                 self.memory.mailbox_ts[nid] = mail_ts.to(self.memory.device)
-                # update mem
-                self.memory.node_memory[nid] = mem.to(self.memory.device)
                 self.memory.node_memory_ts[nid] = mem_ts.to(self.memory.device)
-            t2 = time.perf_counter()
-            # print('1 ', t2-t1)
-            # print('2 ', t4-t3)
-            # print('3 ', t2-t5)
-            # print('4 ', t5-t4)
-        return updated_memory
+                if push_msg is not None:
+                    idx = torch.searchsorted(nid, push_msg.to(device))
+                    self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
+                    self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
+                    # self.memory.node_memory[nid] = mem.to(self.memory.device)
+                    # self.memory.mailbox[nid] = mail.to(self.memory.device)
+                else:
+                    self.memory.node_memory[nid] = mem.to(self.memory.device)
+                    self.memory.mailbox[nid] = mail.to(self.memory.device)
+        if send_msg is not None:
+            idx = torch.searchsorted(nid, send_msg.to(device))
+            return updated_memory, mem[idx], mail[idx]
+        else:
+            return updated_memory, None, None
 
     def get_updated_memory(self, b: DGLBlock, updated_memory: torch.tensor, mem, mail, mem_ts, mail_ts):
         memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
-        # memory = self.memory_updater(b.srcdata['mem'][length:, :], b.srcdata['mail'][length:, :],
-        #                                  b.srcdata['mem_ts'][length:], b.srcdata['mail_ts'][length:])
-
         if 'h' in b.srcdata:
             b.srcdata['h'] += torch.cat((updated_memory, memory), dim=0)
         else:

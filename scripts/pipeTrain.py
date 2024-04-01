@@ -117,7 +117,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
 
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                updated_memory, _, _ = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
             if iteration_now+1 != int(len(dataloader)):
                 dst = (args.rank+1)%args.world_size
@@ -144,6 +144,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
             aps.append(average_precision_score(y_true, y_pred))
 
         val_losses.append(float(total_loss))
+    print('debug2')
 
     ap = float(torch.tensor(aps).mean())
     auc_mrr = float(torch.tensor(aucs_mrrs).mean())
@@ -174,6 +175,7 @@ def main():
 
     data_path = os.path.join(path, 'data')
     train_data, val_data, test_data, full_data = load_dataset(args.data, data_path)
+    
     train_rand_sampler = DstRandEdgeSampler(
         train_data['dst'].to_numpy(dtype=np.int32))
     val_rand_sampler = DstRandEdgeSampler(
@@ -189,6 +191,8 @@ def main():
     args.lr = args.lr * math.sqrt(args.world_size)
     logging.info("batch size: {}, lr: {}".format(batch_size, args.lr))
 
+    findOverlap_sampler = BatchSampler(
+            SequentialSampler(train_ds), batch_size=batch_size, drop_last=False)
     train_sampler = DistributedBatchSampler(
         SequentialSampler(train_ds), batch_size=batch_size,
         drop_last=False, rank=args.rank, world_size=args.world_size,
@@ -202,6 +206,9 @@ def main():
         batch_size=batch_size, drop_last=False, rank=args.rank,
         world_size=args.world_size)
 
+    findOverlap_loader = torch.utils.data.DataLoader(
+        train_ds, sampler=findOverlap_sampler,
+        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     train_loader = torch.utils.data.DataLoader(
         train_ds, sampler=train_sampler,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
@@ -286,12 +293,13 @@ def main():
                          pre_sampling_rounds=2)
     else:
         cache.init_cache()
-
+    
     logging.info("cache mem size: {:.2f} MB".format(
         cache.get_mem_size() / 1000 / 1000))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = torch.nn.BCEWithLogitsLoss()
+    model.memory.findOverlapMem(findOverlap_loader, batch_size*2, args.rank, args.world_size)
 
     best_e = train(train_loader, val_loader, sampler,
                    model, optimizer, criterion, cache, device, model_data)
@@ -336,6 +344,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     for i in range(args.world_size):
         g = dist.new_group([i, (i+1)%args.world_size])
         groups.append(g)
+    
     for e in range(args.epoch):
         model.train()
         cache.reset()
@@ -405,22 +414,17 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             if sends_thread1 != None:
                sends_thread1.join() 
-            if args.rank!=0 or flag:
-                src = (args.rank-1+args.world_size)%args.world_size
-                idx = src
-                recv(None, src, groups[idx])
-                
             ttt += time.perf_counter() - tmp
 
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
-
-            if iteration_now+1+args.world_size != int(len(train_loader)):
-                dst = (args.rank+1)%args.world_size
+                idx = (args.rank-1+args.world_size)%args.world_size
+                mem, mail = model.memory.recv_mem(iteration_now, args.rank, args.world_size, device, groups[idx])
+                push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
+                updated_memory, mem, mail = model.update_memory_and_mail(b, update_length, mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
                 idx = args.rank
-                sends_thread1 = threading.Thread(target=send, args=(None, dst, groups[idx]))
-                sends_thread1.start()
+                if iteration_now+1+args.world_size != int(len(train_loader)):
+                    sends_thread1 = model.memory.send_mem(mem, mail, args.rank, args.world_size, groups[idx])
 
             total_memory_update_time += time.perf_counter() - memory_update_start_time
             

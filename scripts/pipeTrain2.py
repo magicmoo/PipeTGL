@@ -117,7 +117,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
 
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                updated_memory, _, _ = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
             if iteration_now+1 != int(len(dataloader)):
                 dst = (args.rank+1)%args.world_size
@@ -414,7 +414,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                updated_memory, _, _ = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
             if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size

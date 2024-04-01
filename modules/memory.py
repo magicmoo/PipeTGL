@@ -2,6 +2,7 @@ from typing import Dict, Optional, Union
 
 import torch
 import torch.distributed as dist
+import time
 import numpy as np
 from dgl.heterograph import DGLBlock
 from dgl.utils.shared_mem import create_shared_mem_array, get_shared_mem_array
@@ -14,6 +15,7 @@ from gnnflow.distributed.kvstore import KVStoreClient
 import gnnflow.utils as utils
 from modules import memory_updater
 from util import recv, send
+import threading
 
 
 class Memory:
@@ -190,12 +192,13 @@ class Memory:
         # b.srcdata['mail_ts'] = mail_ts[inv]
         # b.srcdata['mail'] = mail[inv]
     
-    def findOverlapMem(self, data_loader, rank: int, world_size: int):
+    def findOverlapMem(self, data_loader, length: int, rank: int, world_size: int):
         iteration_now = -1
-        last_nodes, current_nodes = None
-        self.recv_msg, self.pull_msg, self.send_msg = [], [], []
+        last_nodes, current_nodes = None, None
+        self.recv_msg, self.pull_msg, self.send_msg, self.push_msg = [], [], [], []
         data_list = []
         for all_nodes, _, _ in data_loader:
+            all_nodes = all_nodes[:length]
             target_nodes = np.unique(all_nodes)
             data_list.append(target_nodes)
         for i in range(rank, len(data_list), world_size):
@@ -209,48 +212,64 @@ class Memory:
             else:
                 next_nodes = None
             
-            if last_nodes != None:
-                self.recv_msg.append(np.intersect1d(last_nodes, current_nodes))
-                self.pull_msg.append(np.setdiff1d(target_nodes, self.recv_msg[-1]))
+            if last_nodes is not None:
+                self.recv_msg.append(torch.from_numpy(np.intersect1d(last_nodes, current_nodes)))
+                self.pull_msg.append(torch.from_numpy(np.setdiff1d(current_nodes, self.recv_msg[-1])))
             else:
                 self.recv_msg.append(None)
-                self.pull_msg.append(None)
-            if next_nodes != None:
-                self.send_msg.append(np.intersect1d(current_nodes, next_nodes))
+                self.pull_msg.append(torch.from_numpy(current_nodes))
+            if next_nodes is not None:
+                self.send_msg.append(torch.from_numpy(np.intersect1d(current_nodes, next_nodes)))
+                self.push_msg.append(torch.from_numpy(np.setdiff1d(current_nodes, self.send_msg[-1])))
             else:
                 self.send_msg.append(None)
+                self.push_msg.append(torch.from_numpy(current_nodes))
+
+        # print(f'{rank}recv: ', [msg[:5] for msg in self.recv_msg[:5]])
+        # print(f'{rank}send: ', [msg[:5] for msg in self.send_msg[:5]])
     
-    def recv_mem(self, all_nodes: np.array, iteration_now, rank, world_size, device, group = None):
+    def recv_mem(self, iteration_now, rank, world_size, device, group = None):
         # Returns the memory required for the current iteratio, the memory required for send to next iteration
-        cached_idx = self.recv_msg[iteration_now/world_size]
-        if cached_idx == None:
+        cached_idx = self.recv_msg[iteration_now//world_size]
+        if cached_idx is None:
             pass
         elif len(cached_idx) > 0:
-            cached_mem = torch.empty([len(cached_idx), self.dim_memory], device=device)
-            cached_mail = torch.empty([len(cached_idx), self.dim_memory], device=device)
+            cached_mem = torch.zeros([len(cached_idx), self.dim_memory], device=device)
+            cached_mail = torch.zeros([len(cached_idx), self.dim_raw_message], device=device)
             src = (rank-1+world_size)% world_size
             recv([cached_mem, cached_mail], rank, src, group)
+            # print('debug2 ', cached_mem)
         else:
             src = (rank-1+world_size)% world_size
             recv(None, rank, src, group)
 
-        uncached_idx = self.pull_msg[iteration_now/world_size]
+        uncached_idx = self.pull_msg[iteration_now//world_size]
         uncached_mem = self.node_memory[uncached_idx].to(device)
         uncached_mail = self.mailbox[uncached_idx].to(device)
-        idx = torch.cat((cached_idx, uncached_idx))
-        mem = torch.stack((cached_mem, uncached_mem), dim=0)
-        mail = torch.stact((cached_mail, uncached_mail), dim=0)
+        if cached_idx is not None and len(cached_idx) > 0:
+            idx = torch.cat((cached_idx, uncached_idx))
+            mem = torch.cat((cached_mem, uncached_mem), dim=0)
+            mail = torch.cat((cached_mail, uncached_mail), dim=0)
+        else:
+            idx = uncached_idx
+            mem = uncached_mem
+            mail = uncached_mail
 
-        idx_idx = torch.argsort(idx)
-        sorted_idx = idx[idx_idx]
-        mem = mem[sorted_idx]
-        mail = mail[sorted_idx]
-
-        new_idx = torch.searchsorted(sorted_idx, all_nodes)
-        mem = mem[new_idx]
-        mail = mail[new_idx]
-
+        idx_idx = np.argsort(idx)
+        mem = mem[idx_idx]
+        mail = mail[idx_idx]
         return mem, mail
 
-    def send_mem(self):
-        pass
+    def send_mem(self, mem, mail, rank, world_size, group):
+        if mem is None:
+            send_thread = None
+        elif mem.shape[0] > 0:
+            dst = (rank+1) % world_size
+            send_thread = threading.Thread(target=send, args=([mem, mail], rank, dst, group))
+            send_thread.start()
+        else:
+            dst = (rank+1) % world_size
+            send_thread = threading.Thread(target=send, args=(None, rank, dst, group))
+            send_thread.start()
+        return send_thread
+        
