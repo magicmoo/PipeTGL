@@ -211,10 +211,10 @@ class TGNN(torch.nn.Module):
                 self.memory.node_memory_ts[nid] = mem_ts.to(self.memory.device)
                 if push_msg is not None:
                     idx = torch.searchsorted(nid, push_msg.to(device))
-                    self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
-                    self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
-                    # self.memory.node_memory[nid] = mem.to(self.memory.device)
-                    # self.memory.mailbox[nid] = mail.to(self.memory.device)
+                    # self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
+                    # self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
+                    self.memory.node_memory[nid] = mem.to(self.memory.device)
+                    self.memory.mailbox[nid] = mail.to(self.memory.device)
                 else:
                     self.memory.node_memory[nid] = mem.to(self.memory.device)
                     self.memory.mailbox[nid] = mail.to(self.memory.device)

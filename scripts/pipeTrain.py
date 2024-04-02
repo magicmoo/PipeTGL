@@ -144,7 +144,6 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
             aps.append(average_precision_score(y_true, y_pred))
 
         val_losses.append(float(total_loss))
-    print('debug2')
 
     ap = float(torch.tensor(aps).mean())
     auc_mrr = float(torch.tensor(aucs_mrrs).mean())
@@ -421,10 +420,11 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 idx = (args.rank-1+args.world_size)%args.world_size
                 mem, mail = model.memory.recv_mem(iteration_now, args.rank, args.world_size, device, groups[idx])
                 push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
+                if iteration_now+1+args.world_size == int(len(train_loader)):
+                    push_msg, send_msg, mem, mail = None, None, None, None
                 updated_memory, mem, mail = model.update_memory_and_mail(b, update_length, mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
                 idx = args.rank
-                if iteration_now+1+args.world_size != int(len(train_loader)):
-                    sends_thread1 = model.memory.send_mem(mem, mail, args.rank, args.world_size, groups[idx])
+                sends_thread1 = model.memory.send_mem(mem, mail, args.rank, args.world_size, groups[idx])
 
             total_memory_update_time += time.perf_counter() - memory_update_start_time
             
@@ -451,24 +451,24 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src + args.world_size
-                recv(None, src, groups[idx])
+                params = [param.data for param in model.parameters()]
+                recv(params, src, groups[idx])
             flag = True
             ttt += time.perf_counter() - tmp
 
-            pull_model(model, model_data)
-            
             # update the model
             optimizer.step()
-            
-            push_model(model, model_data)
 
             total_model_update_time += time.perf_counter() - model_update_start_time
 
             if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
-                sends_thread2 = threading.Thread(target=send, args=(None, dst, groups[idx]))
+                params = [param.data.clone() for param in model.parameters()]
+                sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
                 sends_thread2.start()
+            else:
+                push_model(model, model_data)
             iteration_now += args.world_size
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
