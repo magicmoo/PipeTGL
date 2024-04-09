@@ -14,7 +14,7 @@ sys.path.append(path)
 from gnnflow.distributed.kvstore import KVStoreClient
 import gnnflow.utils as utils
 from modules import memory_updater
-from util import recv, send
+from modules.util import recv, send
 import threading
 
 
@@ -234,8 +234,8 @@ class Memory:
         if cached_idx is None:
             pass
         elif len(cached_idx) > 0:
-            cached_mem = torch.zeros([len(cached_idx), self.dim_memory], device=device)
-            cached_mail = torch.zeros([len(cached_idx), self.dim_raw_message], device=device)
+            cached_mem = torch.empty([len(cached_idx), self.dim_memory], device=device)
+            cached_mail = torch.empty([len(cached_idx), self.dim_raw_message], device=device)
             src = (rank-1+world_size)% world_size
             recv([cached_mem, cached_mail], rank, src, group)
             # print('debug2 ', cached_mem)

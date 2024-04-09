@@ -410,22 +410,29 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             memory_update_start_time = time.perf_counter()
             
             tmp = time.perf_counter()
-
+            t1 = time.time()
             if sends_thread1 != None:
-               sends_thread1.join() 
+               sends_thread1.join()
             ttt += time.perf_counter() - tmp
-
+            t2 = time.time()
             if args.use_memory:
                 b = mfgs[0][0]
                 idx = (args.rank-1+args.world_size)%args.world_size
                 mem, mail = model.memory.recv_mem(iteration_now, args.rank, args.world_size, device, groups[idx])
+                t3 = time.time()
                 push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
                 if iteration_now+1+args.world_size == int(len(train_loader)):
                     push_msg, send_msg, mem, mail = None, None, None, None
                 updated_memory, mem, mail = model.update_memory_and_mail(b, update_length, mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
                 idx = args.rank
+                t4 = time.time()
                 sends_thread1 = model.memory.send_mem(mem, mail, args.rank, args.world_size, groups[idx])
-
+            t5 = time.time()
+            print("--------------")
+            print(t2-t1)
+            print(t3-t2)
+            print(t4-t3)
+            print(t5-t4)
             total_memory_update_time += time.perf_counter() - memory_update_start_time
             
             model_train_start_time = time.perf_counter()
