@@ -41,15 +41,15 @@ from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
 path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
-model_names = ['TGN', 'TGAT', 'DySAT', 'GRAPHSAGE', 'GAT']
+model_names = ['TGNN']
 cache_names = sorted(name for name in caches.__dict__
                      if not name.startswith("__")
                      and callable(caches.__dict__[name]))
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model", choices=model_names, required=True,
+parser.add_argument("--model", choices=model_names, default='TGNN',
                     help="model architecture" + '|'.join(model_names))
-parser.add_argument("--data", choices=datasets, required=True,
+parser.add_argument("--data", choices=datasets, default='REDDIT',
                     help="dataset:" + '|'.join(datasets))
 parser.add_argument("--epoch", help="maximum training epoch",
                     type=int, default=50)
@@ -63,16 +63,14 @@ parser.add_argument("--print-freq", help="print frequency",
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
-
-# optimization
-parser.add_argument("--cache", choices=cache_names, help="feature cache:" +
-                    '|'.join(cache_names))
 parser.add_argument("--edge-cache-ratio", type=float, default=0,
                     help="cache ratio for edge feature cache")
 parser.add_argument("--node-cache-ratio", type=float, default=0,
                     help="cache ratio for node feature cache")
 parser.add_argument("--snapshot-time-window", type=float, default=0,
                     help="time window for sampling")
+parser.add_argument("--cache", choices=cache_names, default='LRUCache', help="feature cache:" +
+                    '|'.join(cache_names))
 
 args = parser.parse_args()
 
@@ -395,6 +393,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         i = 0
         while True:
+            sample_start_time = time.time()
             if sampling_thread is not None:
                 sampling_thread.join()
 
@@ -409,9 +408,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             sampling_thread = threading.Thread(target=sampling, args=(
                 next_target_nodes, next_ts, next_eid))
             sampling_thread.start()
-
-            # Feature
             mfgs_to_cuda(mfgs, device)
+            total_sampling_time += time.time() - sample_start_time
+            
             feature_start_time = time.time()
             mfgs = cache.fetch_feature(
                 mfgs, eid)

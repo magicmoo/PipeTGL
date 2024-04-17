@@ -14,7 +14,7 @@ sys.path.append(path)
 from gnnflow.distributed.kvstore import KVStoreClient
 import gnnflow.utils as utils
 from modules import memory_updater
-from modules.util import recv, send
+from modules.util import recv, send, recv_req
 import threading
 
 
@@ -237,7 +237,9 @@ class Memory:
             cached_mem = torch.empty([len(cached_idx), self.dim_memory], device=device)
             cached_mail = torch.empty([len(cached_idx), self.dim_raw_message], device=device)
             src = (rank-1+world_size)% world_size
-            recv([cached_mem, cached_mail], rank, src, group)
+            t1 = time.time()
+            reqs = recv_req([cached_mem, cached_mail], rank, src, group)
+            # print(time.time()-t1)
             # print('debug2 ', cached_mem)
         else:
             src = (rank-1+world_size)% world_size
@@ -247,6 +249,8 @@ class Memory:
         uncached_mem = self.node_memory[uncached_idx].to(device)
         uncached_mail = self.mailbox[uncached_idx].to(device)
         if cached_idx is not None and len(cached_idx) > 0:
+            for req in reqs:
+                req.wait()
             idx = torch.cat((cached_idx, uncached_idx))
             mem = torch.cat((cached_mem, uncached_mem), dim=0)
             mail = torch.cat((cached_mail, uncached_mail), dim=0)
@@ -273,3 +277,5 @@ class Memory:
             send_thread.start()
         return send_thread
         
+    def push_back_mem(self, mem, mail):
+        pass

@@ -17,15 +17,16 @@ class TestMemory(unittest.TestCase):
         data_loader = []
         mem = self.memory
         for _ in range(6):
-            all_nodes = torch.tensor([random.randint(0, 9) for _ in range(10)])
+            all_nodes = torch.sort(torch.tensor([random.randint(0, 9) for _ in range(10)])).values
             print(all_nodes)
             data_loader.append((all_nodes, None, None))
         mem.findOverlapMem(data_loader, 10, 0, 2)
         print(mem.send_msg)
+        print(mem.push_msg)
 
         mem.findOverlapMem(data_loader, 10, 1, 2)
-        tmp = mem.node_memory[mem.send_msg[0]].to('cuda:1')
-        print(tmp)
+        print(mem.recv_msg)
+        print(mem.pull_msg)
 
 if __name__ == '__main__':
     unittest.main()

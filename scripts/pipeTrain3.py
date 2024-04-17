@@ -174,7 +174,6 @@ def main():
 
     data_path = os.path.join(path, 'data')
     train_data, val_data, test_data, full_data = load_dataset(args.data, data_path)
-    
     train_rand_sampler = DstRandEdgeSampler(
         train_data['dst'].to_numpy(dtype=np.int32))
     val_rand_sampler = DstRandEdgeSampler(
@@ -190,8 +189,6 @@ def main():
     args.lr = args.lr * math.sqrt(args.world_size)
     logging.info("batch size: {}, lr: {}".format(batch_size, args.lr))
 
-    findOverlap_sampler = BatchSampler(
-            SequentialSampler(train_ds), batch_size=batch_size, drop_last=False)
     train_sampler = DistributedBatchSampler(
         SequentialSampler(train_ds), batch_size=batch_size,
         drop_last=False, rank=args.rank, world_size=args.world_size,
@@ -205,9 +202,6 @@ def main():
         batch_size=batch_size, drop_last=False, rank=args.rank,
         world_size=args.world_size)
 
-    findOverlap_loader = torch.utils.data.DataLoader(
-        train_ds, sampler=findOverlap_sampler,
-        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     train_loader = torch.utils.data.DataLoader(
         train_ds, sampler=train_sampler,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
@@ -292,13 +286,12 @@ def main():
                          pre_sampling_rounds=2)
     else:
         cache.init_cache()
-    
+
     logging.info("cache mem size: {:.2f} MB".format(
         cache.get_mem_size() / 1000 / 1000))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = torch.nn.BCEWithLogitsLoss()
-    model.memory.findOverlapMem(findOverlap_loader, batch_size*2, args.rank, args.world_size)
 
     best_e = train(train_loader, val_loader, sampler,
                    model, optimizer, criterion, cache, device, model_data)
@@ -343,7 +336,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     for i in range(args.world_size):
         g = dist.new_group([i, (i+1)%args.world_size])
         groups.append(g)
-    
     for e in range(args.epoch):
         model.train()
         cache.reset()
@@ -410,29 +402,26 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             memory_update_start_time = time.perf_counter()
             
             tmp = time.perf_counter()
-            t1 = time.time()
+
             if sends_thread1 != None:
-               sends_thread1.join()
+               sends_thread1.join() 
+            if args.rank!=0 or flag:
+                src = (args.rank-1+args.world_size)%args.world_size
+                idx = src
+                recv(None, src, groups[idx])
+                
             ttt += time.perf_counter() - tmp
-            t2 = time.time()
+
             if args.use_memory:
                 b = mfgs[0][0]
-                idx = (args.rank-1+args.world_size)%args.world_size
-                mem, mail = model.memory.recv_mem(iteration_now, args.rank, args.world_size, device, groups[idx])
-                # print(iteration_now)
-                t3 = time.time()
-                push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
-                if iteration_now+1+args.world_size == int(len(train_loader)):
-                    push_msg, send_msg, mem, mail = None, None, None, None
+                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+
+            if iteration_now+1+args.world_size != int(len(train_loader)):
+                dst = (args.rank+1)%args.world_size
                 idx = args.rank
-                updated_memory, sends_thread1 = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
-                t4 = time.time()
-            t5 = time.time()
-            # print("--------------")
-            # print(t2-t1)
-            # print(t3-t2)
-            # print(t4-t3)
-            # print(t5-t4)
+                sends_thread1 = threading.Thread(target=send, args=(None, dst, groups[idx]))
+                sends_thread1.start()
+
             total_memory_update_time += time.perf_counter() - memory_update_start_time
             
             model_train_start_time = time.perf_counter()
@@ -458,22 +447,24 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src + args.world_size
-                params = [param.data for param in model.parameters()]
-                recv(params, src, groups[idx])
+                # params = [param.data for param in model.parameters()]
+                recv(None, src, groups[idx])
             flag = True
             ttt += time.perf_counter() - tmp
+            pull_model(model, model_data)
 
             # update the model
             optimizer.step()
+
+            push_model(model, model_data)
 
             total_model_update_time += time.perf_counter() - model_update_start_time
 
             if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
-                params = [param.data.clone() for param in model.parameters()]
-                # sends_thread2 = Process(target=send, args=(params, dst, groups[idx]))
-                sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
+                # params = [param.data.clone() for param in model.parameters()]
+                sends_thread2 = threading.Thread(target=send, args=(None, dst, groups[idx]))
                 sends_thread2.start()
             else:
                 push_model(model, model_data)
@@ -540,7 +531,7 @@ tb = 0
 def push_model(model, model_data):
     i = 0
     for param in model.parameters():
-        model_data[i][:] = param.data[:].to('cpu')
+        model_data[i][:] = param.data.clone()[:].to('cpu')
         i += 1
 
 def pull_model(model, model_data):
@@ -563,8 +554,8 @@ def send(tensors: list, target: int, group: object = None):
         for tensor in tensors:
             ops.append(dist.P2POp(dist.isend, tensor, target, group))
         reqs = dist.batch_isend_irecv(ops)
-        # for req in reqs:
-        #     req.wait()
+        for req in reqs:
+            req.wait()
         # print(f'send2 finished: {args.rank}')
     
     

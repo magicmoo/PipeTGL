@@ -22,7 +22,7 @@ import torch.utils.data
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.utils.data import BatchSampler, SequentialSampler
 from tqdm import tqdm
-from torch.multiprocessing import Process, Queue
+from torch.multiprocessing import Process
 from dgl.utils.shared_mem import create_shared_mem_array, get_shared_mem_array
 import torch.multiprocessing as mp
 
@@ -117,7 +117,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
 
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory, _, _ = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                updated_memory= model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
             if iteration_now+1 != int(len(dataloader)):
                 dst = (args.rank+1)%args.world_size
@@ -414,7 +414,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory, _, _ = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                updated_memory= model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
             if iteration_now+1+args.world_size != int(len(train_loader)):
                 dst = (args.rank+1)%args.world_size
@@ -461,6 +461,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
                 params = [param.data.clone() for param in model.parameters()]
+                # sends_thread2 = Process(target=send, args=(params, dst, groups[idx]))
                 sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
                 sends_thread2.start()
             else:
@@ -543,7 +544,7 @@ def send(tensors: list, target: int, group: object = None):
         tensor = torch.tensor([args.local_rank]).to(f'cuda:{args.local_rank}')
         # print(f'send1: {args.rank} {tensor}')
         req = dist.isend(tensor, target, group)
-        req.wait()
+        # req.wait()
         # print(f'send1 finished: {args.rank}')
     else:
         # print(f'send2: {args.rank} at {time.perf_counter()-tb:.6f}')
@@ -551,8 +552,8 @@ def send(tensors: list, target: int, group: object = None):
         for tensor in tensors:
             ops.append(dist.P2POp(dist.isend, tensor, target, group))
         reqs = dist.batch_isend_irecv(ops)
-        for req in reqs:
-            req.wait()
+        # for req in reqs:
+        #     req.wait()
         # print(f'send2 finished: {args.rank}')
     
     
