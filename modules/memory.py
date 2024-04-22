@@ -156,7 +156,7 @@ class Memory:
         self.mailbox.copy_(backup['mailbox'])
         self.mailbox_ts.copy_(backup['mailbox_ts'])
 
-    def prepare_input(self, b: DGLBlock, update_length: int):
+    def prepare_input(self, b: DGLBlock, updated_memory: torch.tensor, updated_mail: torch.tensor, overlap_nid: torch.tensor):
         """
         Prepare the input for the memory module.
 
@@ -167,19 +167,23 @@ class Memory:
                 `b.srcdata['ts']` is the time stamps of all nodes.
         """
         device = b.device
-        all_nodes = b.srcdata['ID'][update_length:]
-        assert isinstance(all_nodes, torch.Tensor)
+        all_nodes = b.srcdata['ID']
 
-        all_nodes_unique, inv = torch.unique(
+        all_nodes_unique, _ = torch.unique(
             all_nodes.cpu(), return_inverse=True)
+        
+        pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes.numpy(), overlap_nid.numpy()))
+
+        inv1 = torch.searchsorted(overlap_nid, all_nodes)
+        inv2 = torch.searchsorted(pull_nodes, all_nodes)
 
         if self.partition:
             pass
         else:
-            mem = self.node_memory[all_nodes_unique].to(device)
-            mem_ts = self.node_memory_ts[all_nodes_unique].to(device)
-            mail = self.mailbox[all_nodes_unique].to(device)
-            mail_ts = self.mailbox_ts[all_nodes_unique].to(device)
+            mem = self.node_memory[pull_nodes].to(device)
+            mem_ts = self.node_memory_ts[pull_nodes].to(device)
+            mail = self.mailbox[pull_nodes].to(device)
+            mail_ts = self.mailbox_ts[pull_nodes].to(device)
         
         return {
             'mem': mem[inv],

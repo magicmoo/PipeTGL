@@ -421,7 +421,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 mem, mail = model.memory.recv_mem(iteration_now, args.rank, args.world_size, device, groups[idx])
                 # print(iteration_now)
                 t3 = time.time()
-                push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
+                overlap_data, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
                 if iteration_now+1+args.world_size == int(len(train_loader)):
                     push_msg, send_msg, mem, mail = None, None, None, None
                 idx = args.rank
@@ -438,7 +438,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             model_train_start_time = time.perf_counter()
             if args.use_memory:
                 b = mfgs[0][0]
-                input = model.memory.prepare_input(b, update_length)
+                input = model.memory.prepare_input(b, **overlap_data)
                 model.get_updated_memory(b, updated_memory, **input)
             # Train
             optimizer.zero_grad()

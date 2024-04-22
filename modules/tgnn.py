@@ -6,6 +6,7 @@ from gnnflow.distributed.kvstore import KVStoreClient
 from gnnflow.models.modules.layers import EdgePredictor, TransfomerAttentionLayer
 import sys
 import os
+import numpy as np
 from modules.memory import Memory
 from modules.memory_updater import GRUMemeoryUpdater
 import time
@@ -240,12 +241,14 @@ class TGNN(torch.nn.Module):
 
         t2 = time.time()
 
-        mem = mem[inv]
-        mail = mail[inv]
-        mem_ts = mem_ts[inv]
-        mail_ts = mail_ts[inv]
         updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
-        new_memory = updated_memory.clone().detach()
+        new_memory = updated_memory[inv].clone().detach()
+
+        output_msg = {
+            'updated_memory': updated_memory,
+            'updated_mail': 
+
+        }
         t3 = time.time()
         
         with torch.no_grad():
@@ -326,10 +329,32 @@ class TGNN(torch.nn.Module):
             sends_thread1 = self.memory.send_mem(mem[idx], mail[idx], rank, world_size, group)
             # self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
             # self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
-            return updated_memory, sends_thread1
+            return updated_memory, node_id, sends_thread1
         else:
             # print(time.time()-t1)
-            return updated_memory, None
+            return updated_memory, node_id, None
+        
+    def prepare_input(self, b: DGLBlock, updated_memory: torch.tensor, overlap_nid: torch.tensor):
+        device = b.device
+        all_nodes = b.srcdata['ID']
+
+        all_nodes_unique, _ = torch.unique(
+            all_nodes.cpu(), return_inverse=True)
+        
+        pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes.numpy(), overlap_nid.numpy()))
+        nid = torch.cat((overlap_nid, pull_nodes), dim=0)
+
+        inv = torch.searchsorted(nid, all_nodes)
+
+        mem = self.node_memory[pull_nodes].to(device)
+        mem_ts = self.node_memory_ts[pull_nodes].to(device)
+        mail = self.mailbox[pull_nodes].to(device)
+        mail_ts = self.mailbox_ts[pull_nodes].to(device)
+        
+        new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
+        memory = torch.cat((updated_memory, new_memory), dim=0)
+        
+        
 
     def get_updated_memory(self, b: DGLBlock, updated_memory: torch.tensor, mem, mail, mem_ts, mail_ts):
         memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
