@@ -243,7 +243,7 @@ class TGNN(torch.nn.Module):
 
         updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
         new_memory = updated_memory[inv].clone().detach()
-        print(new_memory.shape)
+        mail_ts = mail_ts[inv]
 
         t3 = time.time()
         
@@ -276,6 +276,7 @@ class TGNN(torch.nn.Module):
             uni, inv = torch.unique(nid, return_inverse=True)
             perm = torch.arange(inv.size(0), dtype=inv.dtype, device=inv.device)
             perm = inv.new_empty(uni.size(0)).scatter_(0, inv, perm)
+
             nid = nid[perm]
             mail = mail[perm]
             mail_ts = mail_ts[perm]
@@ -339,17 +340,16 @@ class TGNN(torch.nn.Module):
         
         pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes_unique.numpy(), overlap_nid.numpy()))
 
-        mem = self.node_memory[pull_nodes].to(device)
-        mem_ts = self.node_memory_ts[pull_nodes].to(device)
-        mail = self.mailbox[pull_nodes].to(device)
-        mail_ts = self.mailbox_ts[pull_nodes].to(device)
+        mem = self.memory.node_memory[pull_nodes].to(device)
+        mem_ts = self.memory.node_memory_ts[pull_nodes].to(device)
+        mail = self.memory.mailbox[pull_nodes].to(device)
+        mail_ts = self.memory.mailbox_ts[pull_nodes].to(device)
         
         new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
         memory = torch.cat((updated_memory, new_memory), dim=0)
-        nid = torch.cat((overlap_nid, pull_nodes), dim=0)
+        nid = torch.cat((overlap_nid, pull_nodes), dim=0).to(device)
 
         inv = torch.searchsorted(nid, all_nodes)
-        
         if 'h' in b.srcdata:
             b.srcdata['h'] += memory[inv]
         else:
