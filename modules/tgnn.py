@@ -243,12 +243,8 @@ class TGNN(torch.nn.Module):
 
         updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
         new_memory = updated_memory[inv].clone().detach()
+        print(new_memory.shape)
 
-        output_msg = {
-            'updated_memory': updated_memory,
-            'updated_mail': 
-
-        }
         t3 = time.time()
         
         with torch.no_grad():
@@ -329,10 +325,10 @@ class TGNN(torch.nn.Module):
             sends_thread1 = self.memory.send_mem(mem[idx], mail[idx], rank, world_size, group)
             # self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
             # self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
-            return updated_memory, node_id, sends_thread1
+            return updated_memory, all_nodes_unique, sends_thread1
         else:
             # print(time.time()-t1)
-            return updated_memory, node_id, None
+            return updated_memory, all_nodes_unique, None
         
     def prepare_input(self, b: DGLBlock, updated_memory: torch.tensor, overlap_nid: torch.tensor):
         device = b.device
@@ -341,10 +337,7 @@ class TGNN(torch.nn.Module):
         all_nodes_unique, _ = torch.unique(
             all_nodes.cpu(), return_inverse=True)
         
-        pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes.numpy(), overlap_nid.numpy()))
-        nid = torch.cat((overlap_nid, pull_nodes), dim=0)
-
-        inv = torch.searchsorted(nid, all_nodes)
+        pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes_unique.numpy(), overlap_nid.numpy()))
 
         mem = self.node_memory[pull_nodes].to(device)
         mem_ts = self.node_memory_ts[pull_nodes].to(device)
@@ -353,7 +346,14 @@ class TGNN(torch.nn.Module):
         
         new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
         memory = torch.cat((updated_memory, new_memory), dim=0)
+        nid = torch.cat((overlap_nid, pull_nodes), dim=0)
+
+        inv = torch.searchsorted(nid, all_nodes)
         
+        if 'h' in b.srcdata:
+            b.srcdata['h'] += memory[inv]
+        else:
+            b.srcdata['h'] = memory[inv]
         
 
     def get_updated_memory(self, b: DGLBlock, updated_memory: torch.tensor, mem, mail, mem_ts, mail_ts):

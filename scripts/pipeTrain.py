@@ -172,7 +172,7 @@ def main():
     # graph is stored in shared memory
     data_config["mem_resource_type"] = "shared"
 
-    data_path = os.path.join(path, 'data')
+    data_path = '/data/TGL'
     train_data, val_data, test_data, full_data = load_dataset(args.data, data_path)
     
     train_rand_sampler = DstRandEdgeSampler(
@@ -421,11 +421,11 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 mem, mail = model.memory.recv_mem(iteration_now, args.rank, args.world_size, device, groups[idx])
                 # print(iteration_now)
                 t3 = time.time()
-                overlap_data, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
+                push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
                 if iteration_now+1+args.world_size == int(len(train_loader)):
                     push_msg, send_msg, mem, mail = None, None, None, None
                 idx = args.rank
-                updated_memory, sends_thread1 = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
+                updated_memory, overlap_nid, sends_thread1 = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
                 t4 = time.time()
             t5 = time.time()
             # print("--------------")
@@ -438,8 +438,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             model_train_start_time = time.perf_counter()
             if args.use_memory:
                 b = mfgs[0][0]
-                input = model.memory.prepare_input(b, **overlap_data)
-                model.get_updated_memory(b, updated_memory, **input)
+                model.prepare_input(b, updated_memory, overlap_nid)
             # Train
             optimizer.zero_grad()
             pred_pos, pred_neg = model(mfgs)

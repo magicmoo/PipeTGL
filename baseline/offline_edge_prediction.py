@@ -187,7 +187,8 @@ def main():
         # graph is stored in shared memory
         data_config["mem_resource_type"] = "shared"
 
-    data_path = os.path.join(path, 'data')
+    # data_path = os.path.join(path, 'data')
+    data_path = '/data/TGL'
     train_data, val_data, test_data, full_data = load_dataset(args.data, data_dir=data_path)
     train_rand_sampler = DstRandEdgeSampler(
         train_data['dst'].to_numpy(dtype=np.int32))

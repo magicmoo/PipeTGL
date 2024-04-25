@@ -6,18 +6,18 @@ import csv
 def change():
     print('change...')
     # 从.pt文件中加载PyTorch张量
-    dataset = 'GDELT'
-    path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    inPath = path + f'/data/{dataset}/node_features.pt'
-    outPath = path + f'/data/{dataset}/node_features.npy'
+    dataset = 'REDDIT'
+    path = '/data/DATA'
+    inPath = path + f'/{dataset}/node_features.pt'
+    outPath = path + f'/{dataset}/node_features.npy'
     if os.path.exists(inPath):
         print('node...')
         tensor = torch.load(inPath)
         array = tensor.numpy()
         np.save(outPath, array)
 
-    inPath = path + f'/data/{dataset}/edge_features.pt'
-    outPath = path + f'/data/{dataset}/edge_features.npy'
+    inPath = path + f'/{dataset}/edge_features.pt'
+    outPath = path + f'/{dataset}/edge_features.npy'
     if os.path.exists(inPath): 
         print('edge...')
         tensor = torch.load(inPath)
@@ -26,10 +26,10 @@ def change():
 
 def generate():
     print('generate...')
-    dataset = 'MOOC'
-    path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    inPath = path + f'/data/{dataset}/edges.csv'
-    outPath = path + f'/data/{dataset}/edge_features.npy'
+    dataset = 'REDDIT'
+    path = '/data/DATA'
+    inPath = path + f'/{dataset}/edges.csv'
+    outPath = path + f'/{dataset}/edge_features.npy'
     if os.path.exists(outPath):
         print('already exist!')
     else:
