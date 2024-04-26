@@ -117,7 +117,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
 
             if args.use_memory:
                 b = mfgs[0][0]
-                updated_memory = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                updated_memory, overlap_nodes = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
             if iteration_now+1 != int(len(dataloader)):
                 dst = (args.rank+1)%args.world_size
@@ -129,8 +129,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
             
             if args.use_memory:
                 b = mfgs[0][0]
-                input = model.memory.prepare_input(b, update_length)
-                model.get_updated_memory(b, updated_memory, **input)
+                model.prepare_input(b, updated_memory, overlap_nodes)
 
             pred_pos, pred_neg = model(mfgs)
 

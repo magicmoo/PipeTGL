@@ -151,12 +151,11 @@ class TGNN(torch.nn.Module):
 
         t2 = time.time()
 
-        mem = mem[inv]
-        mail = mail[inv]
-        mem_ts = mem_ts[inv]
-        mail_ts = mail_ts[inv]
         updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
         new_memory = updated_memory.clone().detach()
+        new_memory = new_memory[inv]
+
+        mail_ts = mail_ts[inv]
         t3 = time.time()
         
         with torch.no_grad():
@@ -223,7 +222,7 @@ class TGNN(torch.nn.Module):
             # print(t4-t3)
             # print(t5-t4)
             # print(time.time()-t1)
-            return updated_memory
+            return updated_memory, all_nodes_unique
 
     def update_memory_and_send(self, b: DGLBlock, length: int, rank: int, world_size: int, group, mem: torch.tensor = None, mail: torch.tensor = None, 
                                push_msg: torch.tensor = None, send_msg: torch.tensor = None, edge_feats: Optional[torch.Tensor] = None):
@@ -241,8 +240,10 @@ class TGNN(torch.nn.Module):
 
         t2 = time.time()
 
-        updated_memory = self.memory_updater.forward(mem, mail, mem_ts, mail_ts)
-        new_memory = updated_memory[inv].clone().detach()
+        updated_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
+        new_memory = updated_memory.clone().detach()
+        new_memory = new_memory[inv]
+        
         mail_ts = mail_ts[inv]
 
         t3 = time.time()
@@ -305,10 +306,8 @@ class TGNN(torch.nn.Module):
                 self.memory.node_memory_ts[nid] = mem_ts.to(self.memory.device)
                 if send_msg is not None:
                     idx = torch.searchsorted(nid, push_msg.to(device))
-                    self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
-                    self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
-                    # self.memory.node_memory[nid] = mem.to(self.memory.device)
-                    # self.memory.mailbox[nid] = mail.to(self.memory.device)
+                    # self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
+                    # self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
                 else:
                     # print('debug')
                     self.memory.node_memory[nid] = mem.to(self.memory.device)
@@ -324,12 +323,37 @@ class TGNN(torch.nn.Module):
             idx = torch.searchsorted(nid, send_msg.to(device))
             # print(send_msg.shape[0] / nid.shape[0])
             sends_thread1 = self.memory.send_mem(mem[idx], mail[idx], rank, world_size, group)
-            # self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
-            # self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
+            self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
+            self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
             return updated_memory, all_nodes_unique, sends_thread1
         else:
             # print(time.time()-t1)
             return updated_memory, all_nodes_unique, None
+    
+    # def prepare_input(self, b: DGLBlock, updated_memory: torch.tensor, overlap_nid: torch.tensor, length):
+    #     device = b.device
+    #     all_nodes = b.srcdata['ID'][:length]
+    #     all_nodes_unique, inv = torch.unique(
+    #         all_nodes.cpu(), return_inverse=True)
+    #     updated_memory = updated_memory[inv]
+
+    #     all_nodes = b.srcdata['ID'][length:]
+
+    #     all_nodes_unique, inv = torch.unique(
+    #         all_nodes.cpu(), return_inverse=True)
+
+    #     mem = self.memory.node_memory[all_nodes_unique].to(device)
+    #     mem_ts = self.memory.node_memory_ts[all_nodes_unique].to(device)
+    #     mail = self.memory.mailbox[all_nodes_unique].to(device)
+    #     mail_ts = self.memory.mailbox_ts[all_nodes_unique].to(device)
+        
+    #     new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
+    #     new_memory = new_memory[inv]
+
+    #     if 'h' in b.srcdata:
+    #         b.srcdata['h'] += torch.cat((updated_memory, new_memory), dim=0)
+    #     else:
+    #         b.srcdata['h'] = torch.cat((updated_memory, new_memory), dim=0)
         
     def prepare_input(self, b: DGLBlock, updated_memory: torch.tensor, overlap_nid: torch.tensor):
         device = b.device
@@ -348,8 +372,12 @@ class TGNN(torch.nn.Module):
         new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
         memory = torch.cat((updated_memory, new_memory), dim=0)
         nid = torch.cat((overlap_nid, pull_nodes), dim=0).to(device)
+        sorted_res = torch.sort(nid)
+        nid = sorted_res.values
+        memory = memory[sorted_res.indices]
 
         inv = torch.searchsorted(nid, all_nodes)
+
         if 'h' in b.srcdata:
             b.srcdata['h'] += memory[inv]
         else:
