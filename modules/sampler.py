@@ -43,39 +43,17 @@ class DistributedBatchSampler(BatchSampler):
 
         self.num_chunks = num_chunks
         self.chunk_size = batch_size // num_chunks
-        self.reorder = False
         self.random_size = batch_size
 
     def __iter__(self) -> Iterator[List[int]]:
-        self.reset()
         batch = []
         for idx in self.sampler:
             # if idx % self.world_size != self.rank:
             if (idx // self.batch_size)%self.world_size != self.rank:
                 continue
             batch.append(idx)
-            if self.reorder:
-                if len(batch) == self.random_size:
-                    yield batch
-                    self.reorder = False
-                    batch = []
-            else:
-                if len(batch) == self.batch_size:
-                    yield batch
-                    batch = []
+            if len(batch) == self.batch_size:
+                yield batch
+                batch = []
         if len(batch) > 0 and not self.drop_last:
             yield batch
-
-    def reset(self):
-        self.reorder = self.num_chunks > 1
-        if self.reorder:
-            if self.rank == 0:
-                randint = torch.randint(
-                    0, self.num_chunks, size=(1,), device=self.device)
-            else:
-                randint = torch.zeros(1, dtype=torch.int64, device=self.device)
-
-            torch.distributed.broadcast(randint, src=0)
-            self.random_size = int(randint.item() * self.chunk_size)
-            if self.random_size == 0:
-                self.reorder = False

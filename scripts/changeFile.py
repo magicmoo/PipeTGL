@@ -6,8 +6,8 @@ import csv
 def change():
     print('change...')
     # 从.pt文件中加载PyTorch张量
-    dataset = 'REDDIT'
-    path = '/data/DATA'
+    dataset = 'MOOC'
+    path = '/data/TGL'
     inPath = path + f'/{dataset}/node_features.pt'
     outPath = path + f'/{dataset}/node_features.npy'
     if os.path.exists(inPath):
@@ -26,8 +26,8 @@ def change():
 
 def generate():
     print('generate...')
-    dataset = 'REDDIT'
-    path = '/data/DATA'
+    dataset = 'MOOC'
+    path = '/data/TGL'
     inPath = path + f'/{dataset}/edges.csv'
     outPath = path + f'/{dataset}/edge_features.npy'
     if os.path.exists(outPath):
@@ -41,6 +41,7 @@ def generate():
         array = tensor.numpy()
         np.save(outPath, array)
         print('success!')
+    
 
 if __name__ == '__main__':
-    change()
+    generate()

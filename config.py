@@ -24,7 +24,7 @@ def get_default_config(model: str, dataset: str):
         mod, f"_{dataset}_default_config")
 
 
-_tgnn_default_config = {
+_tgn_default_config = {
     "dropout": 0.2,
     "att_head": 2,
     "att_dropout": 0.2,
