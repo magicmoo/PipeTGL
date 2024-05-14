@@ -78,6 +78,13 @@ class Memory:
                         dtype=torch.float32)
                     self.mailbox_ts = create_shared_mem_array(
                         'mailbox_ts', (num_nodes,), dtype=torch.float32)
+                    
+                    self.is_pin_memory = False
+                    self.already_pin_memory = False
+                    self.pin_node_memory = None
+                    self.pin_node_memory_ts = None
+                    self.pin_mailbox = None
+                    self.pin_mailbox_ts = None
 
                     self.node_memory.zero_()
                     self.node_memory_ts.zero_()
@@ -242,6 +249,12 @@ class Memory:
             send_thread = threading.Thread(target=send, args=(None, rank, dst, group))
             send_thread.start()
         return send_thread
+    
+    def pin_memory(self):
+        self.is_pin_memory = True
+    
+    def already_pin_memory(self):
+        self.already_pin_memory = True
         
     def push_back_mem(self, mem, mail):
         pass

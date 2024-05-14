@@ -46,7 +46,7 @@ parser.add_argument("--model", choices=model_names, default='TGN',
 parser.add_argument("--data", choices=datasets, required=True,
                     help="dataset:" + '|'.join(datasets))
 parser.add_argument("--epoch", help="maximum training epoch",
-                    type=int, default=50)
+                    type=int, default=100)
 parser.add_argument("--lr", help='learning rate', type=float, default=0.0001)
 parser.add_argument("--num-workers", help="num workers for dataloaders",
                     type=int, default=1)
@@ -358,6 +358,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
     auc_list, tb_list, loss_list = [], [], []
     for e in range(args.epoch):
+        start_time = time.time()
         model.train()
         cache.reset()
         if e > 0:
@@ -375,7 +376,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         total_memory_write_back_time = 0
         total_model_train_time = 0
         total_samples = 0
-        epoch_time = 0
 
         train_iter = iter(train_loader)
         t1 = time.time()
@@ -392,7 +392,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         i = 0
         while True:
-            start_time = time.time()
             sampling_start_time = time.time()
             if sampling_thread is not None:
                 sampling_thread.join()
@@ -471,7 +470,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
             total_samples += num_target_nodes
-            epoch_time += time.time()-start_time
             i += 1
 
             # if (i+1) % args.print_freq == 0:
@@ -495,7 +493,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             #             train_loader)/args.world_size), total_samples * args.world_size / (time.time() - epoch_time_start), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, time.time() - epoch_time_start))
 
         torch.distributed.barrier()
-
+        
+        epoch_time = time.time()-start_time
         epoch_time_sum += epoch_time
 
         # Validation

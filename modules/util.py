@@ -61,6 +61,7 @@ def recv_req(tensors: list, rank: int, target: int, group: object = None):
     reqs = dist.batch_isend_irecv(ops)
     return reqs
     # print(f'recv2 finished: {rank}')
+    
 
 def load_feat(dataset: str, data_dir: Optional[str] = None,
               shared_memory: bool = False, local_rank: int = 0, local_world_size: int = 1,

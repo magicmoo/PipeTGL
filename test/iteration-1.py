@@ -53,7 +53,7 @@ parser.add_argument("--model", choices=model_names, default='TGNN',
 parser.add_argument("--data", choices=datasets, default='REDDIT',
                     help="dataset:" + '|'.join(datasets))
 parser.add_argument("--epoch", help="maximum training epoch",
-                    type=int, default=100)
+                    type=int, default=50)
 parser.add_argument("--lr", help='learning rate', type=float, default=0.0001)
 parser.add_argument("--num-workers", help="num workers for dataloaders",
                     type=int, default=1)
@@ -72,6 +72,7 @@ parser.add_argument("--snapshot-time-window", type=float, default=0,
                     help="time window for sampling")
 parser.add_argument("--cache", choices=cache_names, default='LRUCache', help="feature cache:" +
                     '|'.join(cache_names))
+parser.add_argument("--syn", choices=cache_names, default=-1, help="iterations to synchronization")
 
 args = parser.parse_args()
 logging.basicConfig(level=logging.DEBUG)
@@ -257,7 +258,6 @@ def main():
             model_data.append(data)
             i += 1
         dist.barrier()
-        push_model(model, model_data)
     else:
         dist.barrier()
         for param in model.parameters():
@@ -346,7 +346,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
 
     for e in range(args.epoch):
-        start_time = time.time()
         model.train()
         cache.reset()
         # if e > 0:
@@ -384,6 +383,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         ttt = 0
         while True:
+            start_time = time.time()
             sample_start_time = time.perf_counter()
             if sampling_thread is not None:
                 sampling_thread.join()
@@ -485,10 +485,10 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
+            epoch_time += time.time() - start_time
             # total_samples += num_target_nodes
             i += 1
 
-        epoch_time = time.time() - start_time
         epoch_time_sum += epoch_time
         # Validation
         val_start = time.time()
@@ -592,7 +592,7 @@ def recv(tensors: list, target: int, group: object = None):
         # print(f'recv2: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
         ops = []
         for tensor in tensors:
-            ops.append(dist.P2POp(dist.irecv, tensor, target, group))
+            ops.append(dist.P2POp(dist.irecv, tensor, target, group)) 
         reqs = dist.batch_isend_irecv(ops)
         for req in reqs:
             req.wait()
@@ -721,31 +721,6 @@ def warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, m
         i += 1
     
     pull_model(model, model_data)
-    # train_iter = iter(train_loader)
-    # target_nodes, ts, eid = next(train_iter)
-    # mfgs = sampler.sample(target_nodes, ts)
-    # mfgs_to_cuda(mfgs, device)
-    # mfgs = cache.fetch_feature(
-    #             mfgs, eid)
-    # update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
-    # if args.use_memory:
-    #     b = mfgs[0][0]
-    #     idx = (args.rank-1+args.world_size)%args.world_size
-    #     mem, mail = model.memory.recv_mem(args.local_rank, args.rank, args.world_size, device, groups[idx])
-    #     push_msg, send_msg = model.memory.push_msg[args.local_rank//args.world_size], model.memory.send_msg[args.local_rank//args.world_size]
-    #     idx = args.rank
-    #     if args.local_rank+1 == args.world_size:
-    #         push_msg, send_msg = None, None
-    #     updated_memory, overlap_nid, send_threads = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
-    # if args.use_memory:
-    #     b = mfgs[0][0]
-    #     model.prepare_input(b, updated_memory, overlap_nid)
-    # optimizer.zero_grad()
-    # pred_pos, pred_neg = model(mfgs)
-    # loss = criterion(pred_pos, torch.ones_like(pred_pos))
-    # loss += criterion(pred_neg, torch.zeros_like(pred_neg))
-    # loss.backward()
-    # pull_model(model, model_data)
 
 if __name__ == '__main__':
     main()

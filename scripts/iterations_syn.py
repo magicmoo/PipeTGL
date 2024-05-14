@@ -40,6 +40,7 @@ from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
                            build_dynamic_graph, get_pinned_buffers,
                            get_project_root_dir, load_dataset, load_feat,
                            mfgs_to_cuda)
+from modules.syn import SynClass
 
 datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
 model_names = ['TGNN']
@@ -72,6 +73,10 @@ parser.add_argument("--snapshot-time-window", type=float, default=0,
                     help="time window for sampling")
 parser.add_argument("--cache", choices=cache_names, default='LRUCache', help="feature cache:" +
                     '|'.join(cache_names))
+parser.add_argument("--syn", type=int, default=-1, help="iterations to synchronization")
+
+
+
 
 args = parser.parse_args()
 logging.basicConfig(level=logging.DEBUG)
@@ -319,6 +324,7 @@ def main():
 
 def train(train_loader, val_loader, sampler, model, optimizer, criterion,
           cache, device, model_data):
+    syn = SynClass(args.local_rank, args.world_size, args.syn)
     best_ap = 0
     best_e = 0
     epoch_time_sum = 0
@@ -373,6 +379,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         sampling_thread = None
         flag = False
+        already_recv = False
         iteration_now = args.rank   
 
         i = 0 
@@ -443,6 +450,17 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 b = mfgs[0][0]
                 model.prepare_input(b, updated_memory, overlap_nid)
             # Train
+            if args.syn != -1 and args.local_rank==0:
+                if flag:
+                    if syn.syn(iteration_now):
+                        src = (args.rank-1+args.world_size)%args.world_size
+                        idx = src + args.world_size
+                        params = [param.data for param in model.parameters()]
+                        recv(params, src, groups[idx])
+                        already_recv = True
+                else:
+                    pull_model(model, model_data)
+                    already_recv = True
             optimizer.zero_grad()
             pred_pos, pred_neg = model(mfgs)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))
@@ -457,11 +475,15 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             tmp = time.perf_counter()
             if sends_thread2 != None:
                sends_thread2.join() 
-            if args.rank!=0 or flag:
+            
+            if (args.rank!=0 or flag) and not already_recv:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src + args.world_size
                 params = [param.data for param in model.parameters()]
                 recv(params, src, groups[idx])
+                
+            elif already_recv:
+                already_recv = False
             else:
                 pull_model(model, model_data)
             flag = True
@@ -473,6 +495,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             total_model_update_time += time.perf_counter() - model_update_start_time
 
             if iteration_now+1+args.world_size != int(len(train_loader)):
+                # print(f'debug2 {args.local_rank}, {iteration_now}')
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
                 params = [param.data.clone() for param in model.parameters()]
@@ -481,6 +504,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 sends_thread2.start()
             else:
                 push_model(model, model_data)
+            if args.syn != -1 and args.local_rank+1 == args.world_size:
+                syn.syn(iteration_now)
             iteration_now += args.world_size
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
