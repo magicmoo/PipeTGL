@@ -443,17 +443,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 b = mfgs[0][0]
                 model.prepare_input(b, updated_memory, overlap_nid)
             # Train
-            optimizer.zero_grad()
-            pred_pos, pred_neg = model(mfgs)
-            loss = criterion(pred_pos, torch.ones_like(pred_pos))
-            loss += criterion(pred_neg, torch.zeros_like(pred_neg))
-            total_loss += float(loss) * num_target_nodes
-            loss.backward()
-
-            total_model_train_time += time.perf_counter() - model_train_start_time
-            model_update_start_time = time.perf_counter()
-
-            # transfer
             tmp = time.perf_counter()
             if sends_thread2 != None:
                sends_thread2.join() 
@@ -466,6 +455,19 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 pull_model(model, model_data)
             flag = True
             ttt += time.perf_counter() - tmp
+            
+            optimizer.zero_grad()
+            pred_pos, pred_neg = model(mfgs)
+            loss = criterion(pred_pos, torch.ones_like(pred_pos))
+            loss += criterion(pred_neg, torch.zeros_like(pred_neg))
+            total_loss += float(loss) * num_target_nodes
+            loss.backward()
+
+            total_model_train_time += time.perf_counter() - model_train_start_time
+            model_update_start_time = time.perf_counter()
+
+            # transfer
+            
 
             # update the model
             optimizer.step()

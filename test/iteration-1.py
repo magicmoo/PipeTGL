@@ -345,6 +345,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     # warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
 
     for e in range(args.epoch):
+        start_time = time.time()
         model.train()
         cache.reset()
         # if e > 0:
@@ -359,7 +360,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         total_model_train_time = 0
         total_model_update_time = 0
         total_samples = 0
-        epoch_time = 0
 
         train_iter = iter(train_loader)
         t1 = time.time()
@@ -382,7 +382,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         ttt = 0
         while True:
-            start_time = time.time()
             sample_start_time = time.perf_counter()
             if sampling_thread is not None:
                 sampling_thread.join()
@@ -490,10 +489,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
-            epoch_time += time.time() - start_time
             # total_samples += num_target_nodes
             i += 1
-
+        epoch_time = time.time() - start_time
         epoch_time_sum += epoch_time
         # Validation
         val_start = time.time()
