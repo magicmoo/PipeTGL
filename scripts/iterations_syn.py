@@ -460,7 +460,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                         already_recv = True
                 else:
                     pull_model(model, model_data)
-                    already_recv = True
             optimizer.zero_grad()
             pred_pos, pred_neg = model(mfgs)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))
