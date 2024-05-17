@@ -455,7 +455,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 pull_model(model, model_data)
             flag = True
             ttt += time.perf_counter() - tmp
-            
             optimizer.zero_grad()
             pred_pos, pred_neg = model(mfgs)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))

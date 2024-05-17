@@ -161,7 +161,8 @@ class TGNN(torch.nn.Module):
         with torch.no_grad():
             last_updated_nid = all_nodes
             last_updated_memory = new_memory
-            last_updated_ts = mail_ts
+            # last_updated_ts = mail_ts
+            last_updated_ts = b.srcdata['ts'][:length]
 
             # genereate mail
             split_chunks = 2
@@ -244,14 +245,15 @@ class TGNN(torch.nn.Module):
         new_memory = updated_memory.clone().detach()
         new_memory = new_memory[inv]
         
-        mail_ts = mail_ts[inv]
+        last_mail_ts = mail_ts[inv]
 
         t3 = time.time()
         
         with torch.no_grad():
             last_updated_nid = all_nodes
             last_updated_memory = new_memory
-            last_updated_ts = mail_ts
+            # last_updated_ts = mail_ts
+            last_updated_ts = b.srcdata['ts'][:length]
 
             # genereate mail
             split_chunks = 2
@@ -286,7 +288,7 @@ class TGNN(torch.nn.Module):
             num_true_src_dst = last_updated_nid.shape[0] // split_chunks * 2
             nid = last_updated_nid[:num_true_src_dst]
             memory = last_updated_memory[:num_true_src_dst]
-            ts = last_updated_ts[:num_true_src_dst]
+            ts = last_mail_ts[:num_true_src_dst]
             # the nid of mem and mail is different
             # after unique they are the same but perm is still different
             uni, inv = torch.unique(nid, return_inverse=True)
@@ -322,8 +324,8 @@ class TGNN(torch.nn.Module):
             idx = torch.searchsorted(nid, send_msg.to(device))
             # print(send_msg.shape[0] / nid.shape[0])
             sends_thread1 = self.memory.send_mem(mem[idx], mail[idx], rank, world_size, group)
-            self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
-            self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
+            # self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
+            # self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
             return updated_memory, all_nodes_unique, sends_thread1
         else:
             return updated_memory, all_nodes_unique, None
