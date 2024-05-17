@@ -186,7 +186,8 @@ def main():
     test_ds = EdgePredictionDataset(test_data, test_rand_sampler)
     batch_size = model_config['batch_size']
     # NB: learning rate is scaled by the number of workers
-    args.lr = args.lr * math.sqrt(args.world_size)
+    # args.lr = args.lr * math.sqrt(args.world_size)
+    args.lr = args.lr
     logging.info("batch size: {}, lr: {}".format(batch_size, args.lr))
 
     findOverlap_sampler = BatchSampler(
