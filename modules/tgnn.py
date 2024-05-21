@@ -155,7 +155,6 @@ class TGNN(torch.nn.Module):
         new_memory = updated_memory.clone().detach()
         new_memory = new_memory[inv]
 
-        mail_ts = mail_ts[inv]
         t3 = time.time()
         
         with torch.no_grad():
@@ -163,6 +162,7 @@ class TGNN(torch.nn.Module):
             last_updated_memory = new_memory
             # last_updated_ts = mail_ts
             last_updated_ts = b.srcdata['ts'][:length]
+            last_updated_mail_ts = mail_ts[inv]
 
             # genereate mail
             split_chunks = 2
@@ -182,7 +182,10 @@ class TGNN(torch.nn.Module):
                             dim=1).reshape(-1, src_mail.shape[1])
             nid = torch.cat(
                 [src.unsqueeze(1), dst.unsqueeze(1)], dim=1).reshape(-1)
-            mail_ts = last_updated_ts[:len(nid)]
+            # mail_ts = last_updated_ts[:len(nid)]
+            src_mail_ts, dst_mail_ts, *_ = last_updated_ts.tensor_split(split_chunks)
+            mail_ts = torch.cat(
+                [src_mail_ts.unsqueeze(1), dst_mail_ts.unsqueeze(1)], dim=1).reshape(-1)
 
             # find unique nid to update mailbox
             uni, inv = torch.unique(nid, return_inverse=True)
@@ -196,7 +199,7 @@ class TGNN(torch.nn.Module):
             num_true_src_dst = last_updated_nid.shape[0] // split_chunks * 2
             nid = last_updated_nid[:num_true_src_dst]
             memory = last_updated_memory[:num_true_src_dst]
-            ts = last_updated_ts[:num_true_src_dst]
+            ts = last_updated_mail_ts[:num_true_src_dst]
             # the nid of mem and mail is different
             # after unique they are the same but perm is still different
             uni, inv = torch.unique(nid, return_inverse=True)
@@ -245,7 +248,7 @@ class TGNN(torch.nn.Module):
         new_memory = updated_memory.clone().detach()
         new_memory = new_memory[inv]
         
-        last_mail_ts = mail_ts[inv]
+        # mail_ts = mail_ts[inv]
 
         t3 = time.time()
         
@@ -254,6 +257,7 @@ class TGNN(torch.nn.Module):
             last_updated_memory = new_memory
             # last_updated_ts = mail_ts
             last_updated_ts = b.srcdata['ts'][:length]
+            last_updated_mail_ts = mail_ts[inv]
 
             # genereate mail
             split_chunks = 2
@@ -273,7 +277,10 @@ class TGNN(torch.nn.Module):
                             dim=1).reshape(-1, src_mail.shape[1])
             nid = torch.cat(
                 [src.unsqueeze(1), dst.unsqueeze(1)], dim=1).reshape(-1)
-            mail_ts = last_updated_ts[:len(nid)]
+            # mail_ts = last_updated_ts
+            src_mail_ts, dst_mail_ts, *_ = last_updated_ts.tensor_split(split_chunks)
+            mail_ts = torch.cat(
+                [src_mail_ts.unsqueeze(1), dst_mail_ts.unsqueeze(1)], dim=1).reshape(-1)
 
             # find unique nid to update mailbox
             uni, inv = torch.unique(nid, return_inverse=True)
@@ -288,7 +295,7 @@ class TGNN(torch.nn.Module):
             num_true_src_dst = last_updated_nid.shape[0] // split_chunks * 2
             nid = last_updated_nid[:num_true_src_dst]
             memory = last_updated_memory[:num_true_src_dst]
-            ts = last_mail_ts[:num_true_src_dst]
+            ts = last_updated_mail_ts[:num_true_src_dst]
             # the nid of mem and mail is different
             # after unique they are the same but perm is still different
             uni, inv = torch.unique(nid, return_inverse=True)

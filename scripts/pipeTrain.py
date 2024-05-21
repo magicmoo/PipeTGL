@@ -186,8 +186,8 @@ def main():
     test_ds = EdgePredictionDataset(test_data, test_rand_sampler)
     batch_size = model_config['batch_size']
     # NB: learning rate is scaled by the number of workers
-    # args.lr = args.lr * math.sqrt(args.world_size)
-    args.lr = args.lr
+    args.lr = args.lr * math.sqrt(args.world_size)
+    # args.lr = args.lr
     logging.info("batch size: {}, lr: {}".format(batch_size, args.lr))
 
     findOverlap_sampler = BatchSampler(
@@ -444,6 +444,18 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 b = mfgs[0][0]
                 model.prepare_input(b, updated_memory, overlap_nid)
             # Train
+            
+            optimizer.zero_grad()
+            pred_pos, pred_neg = model(mfgs)
+            loss = criterion(pred_pos, torch.ones_like(pred_pos))
+            loss += criterion(pred_neg, torch.zeros_like(pred_neg))
+            total_loss += float(loss) * num_target_nodes
+            loss.backward()
+
+            total_model_train_time += time.perf_counter() - model_train_start_time
+            model_update_start_time = time.perf_counter()
+
+            # transfer
             tmp = time.perf_counter()
             if sends_thread2 != None:
                sends_thread2.join() 
@@ -456,18 +468,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 pull_model(model, model_data)
             flag = True
             ttt += time.perf_counter() - tmp
-            optimizer.zero_grad()
-            pred_pos, pred_neg = model(mfgs)
-            loss = criterion(pred_pos, torch.ones_like(pred_pos))
-            loss += criterion(pred_neg, torch.zeros_like(pred_neg))
-            total_loss += float(loss) * num_target_nodes
-            loss.backward()
-
-            total_model_train_time += time.perf_counter() - model_train_start_time
-            model_update_start_time = time.perf_counter()
-
-            # transfer
-            
 
             # update the model
             optimizer.step()

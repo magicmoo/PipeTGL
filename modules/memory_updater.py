@@ -36,6 +36,6 @@ class GRUMemeoryUpdater(torch.nn.Module):
 
     def forward(self, mem: torch.tensor, mail: torch.tensor, mem_ts: torch.tensor, mail_ts: torch.tensor):
         if self.use_time_enc:
-            time_feat = self.time_enc(mail_ts-mem_ts)
+            time_feat = self.time_enc(mail_ts-mem_ts)  # error!!!
             mail = torch.cat([mail, time_feat], dim=1)
         return self.updater(mail, mem)

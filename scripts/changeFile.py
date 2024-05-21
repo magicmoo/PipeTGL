@@ -6,7 +6,7 @@ import csv
 def change():
     print('change...')
     # 从.pt文件中加载PyTorch张量
-    dataset = 'MOOC'
+    dataset = 'LASTFM'
     path = '/data/TGL'
     inPath = path + f'/{dataset}/node_features.pt'
     outPath = path + f'/{dataset}/node_features.npy'
@@ -26,7 +26,7 @@ def change():
 
 def generate():
     print('generate...')
-    dataset = 'MOOC'
+    dataset = 'LASTFM'
     path = '/data/TGL'
     inPath = path + f'/{dataset}/edges.csv'
     outPath = path + f'/{dataset}/edge_features.npy'
