@@ -11,6 +11,19 @@ import torch.distributed as dist
 from dgl.heterograph import DGLBlock
 from dgl.utils.shared_mem import create_shared_mem_array, get_shared_mem_array
 
+
+def push_model(model, model_data):
+    i = 0
+    for param in model.parameters():
+        model_data[i][:] = param.data[:].to('cpu')
+        i += 1
+
+def pull_model(model, model_data, device):
+    i = 0
+    for param in model.parameters():
+        param.data[:] = model_data[i][:].to(device)
+        i += 1
+
 def send(tensors: list, rank: int, target: int, group: object = None):
     
     if tensors == None:
@@ -20,14 +33,14 @@ def send(tensors: list, rank: int, target: int, group: object = None):
         # req.wait()
         # print(f'send1 finished: {rank}')
     else:
-        # print(f'send2: {rank}')
+        print(f'send2: {rank}')
         ops = []
         for tensor in tensors:
             ops.append(dist.P2POp(dist.isend, tensor, target, group))
         reqs = dist.batch_isend_irecv(ops)
         # for req in reqs:
         #     req.wait()
-        # print(f'send2 finished: {rank}')
+        print(f'send2 finished: {rank}')
     
     
 def recv(tensors: list, rank: int, target: int, group: object = None):
@@ -42,25 +55,25 @@ def recv(tensors: list, rank: int, target: int, group: object = None):
         else:
             return False
     else:
-        # print(f'recv2: {rank} from {target}')
+        print(f'recv2: {rank} from {target}')
         ops = []
         for tensor in tensors:
             ops.append(dist.P2POp(dist.irecv, tensor, target, group))
         reqs = dist.batch_isend_irecv(ops)
         for req in reqs:
             req.wait()
-        # print(f'recv2 finished: {rank}')
+        print(f'recv2 finished: {rank}')
 
 def recv_req(tensors: list, rank: int, target: int, group: object = None):
     # determine that tensors is a list
 
-    # print(f'recv2: {rank} from {target}')
+    print(f'recv2: {rank} from {target}')
     ops = []
     for tensor in tensors:
         ops.append(dist.P2POp(dist.irecv, tensor, target, group))
     reqs = dist.batch_isend_irecv(ops)
+    print(f'recv2 finished: {rank}')
     return reqs
-    # print(f'recv2 finished: {rank}')
     
 
 def load_feat(dataset: str, data_dir: Optional[str] = None,
@@ -103,33 +116,31 @@ def load_feat(dataset: str, data_dir: Optional[str] = None,
     edge_feats = None
     if not shared_memory or (shared_memory and local_rank == 0):
         if os.path.exists(node_feat_path) and load_node:
-            node_feats = np.load(
-                node_feat_path, mmap_mode=mmap_mode, allow_pickle=False)
-            if not memmap:
-                node_feats = torch.from_numpy(node_feats)
+            raw_node_feats = torch.load(node_feat_path)
 
         if os.path.exists(edge_feat_path) and load_edge:
-            edge_feats = np.load(
-                edge_feat_path, mmap_mode=mmap_mode, allow_pickle=False)
-            if not memmap:
-                edge_feats = torch.from_numpy(edge_feats)
+            raw_edge_feats = torch.load(edge_feat_path)
 
     if shared_memory:
         node_feats_shm, edge_feats_shm = None, None
         if local_rank == 0:
             if node_feats is not None:
-                node_feats = node_feats.to(torch.float32)
+                node_feats = raw_node_feats.to(torch.float32)
+                del raw_node_feats
                 node_feats_shm = create_shared_mem_array(
                     'node_feats', node_feats.shape, node_feats.dtype)
                 node_feats_shm[:] = node_feats[:]
             if edge_feats is not None:
-                edge_feats = edge_feats.to(torch.float32)
+                edge_feats = raw_edge_feats.to(torch.float32)
+                del raw_edge_feats
                 edge_feats_shm = create_shared_mem_array(
                     'edge_feats', edge_feats.shape, edge_feats.dtype)
                 edge_feats_shm[:] = edge_feats[:]
             # broadcast the shape and dtype of the features
             node_feats_shape = node_feats.shape if node_feats is not None else None
             edge_feats_shape = edge_feats.shape if edge_feats is not None else None
+            del node_feats
+            del edge_feats
             torch.distributed.broadcast_object_list(
                 [node_feats_shape, edge_feats_shape], src=0)
 

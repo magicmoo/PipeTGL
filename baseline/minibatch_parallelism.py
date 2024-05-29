@@ -31,8 +31,9 @@ from gnnflow.models.graphsage import SAGE
 from gnnflow.temporal_sampler import TemporalSampler
 from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
                            build_dynamic_graph, get_pinned_buffers,
-                           get_project_root_dir, load_dataset, load_feat,
-                           mfgs_to_cuda)
+                           get_project_root_dir, load_dataset,
+                           mfgs_to_cuda, load_feat)
+# from modules.util import load_feat
 
 datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
 model_names = ['TGN', 'TGAT', 'DySAT', 'GRAPHSAGE', 'GAT']
@@ -53,9 +54,9 @@ parser.add_argument("--num-workers", help="num workers for dataloaders",
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
-                    type=int, default=100)
+                    type=int, default=2000)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ingestion-batch-size", type=int, default=1000,
+parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
 
 # optimization
@@ -275,7 +276,7 @@ def main():
 
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[args.local_rank], find_unused_parameters=False)
+            model, device_ids=[args.local_rank], find_unused_parameters=True)
 
     pinned_nfeat_buffs, pinned_efeat_buffs = get_pinned_buffers(
         model_config['fanouts'], model_config['num_snapshots'], batch_size,
@@ -472,25 +473,25 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             total_samples += num_target_nodes
             i += 1
 
-            # if (i+1) % args.print_freq == 0:
-            #     if args.distributed:
-            #         metrics = torch.tensor([total_loss, cache_edge_ratio_sum,
-            #                                 cache_node_ratio_sum, total_samples,
-            #                                 total_sampling_time, total_feature_fetch_time,
-            #                                 total_memory_update_time,
-            #                                 total_memory_write_back_time,
-            #                                 total_model_train_time
-            #                                 ]).to(device)
-            #         torch.distributed.all_reduce(metrics)
-            #         metrics /= args.world_size
-            #         total_loss, cache_edge_ratio_sum, cache_node_ratio_sum, \
-            #             total_samples, total_sampling_time, total_feature_fetch_time, \
-            #             total_memory_update_time, total_memory_write_back_time, \
-            #             total_model_train_time = metrics.tolist()
+            if (i+1) % args.print_freq == 0:
+                if args.distributed:
+                    metrics = torch.tensor([total_loss, cache_edge_ratio_sum,
+                                            cache_node_ratio_sum, total_samples,
+                                            total_sampling_time, total_feature_fetch_time,
+                                            total_memory_update_time,
+                                            total_memory_write_back_time,
+                                            total_model_train_time
+                                            ]).to(device)
+                    torch.distributed.all_reduce(metrics)
+                    metrics /= args.world_size
+                    total_loss, cache_edge_ratio_sum, cache_node_ratio_sum, \
+                        total_samples, total_sampling_time, total_feature_fetch_time, \
+                        total_memory_update_time, total_memory_write_back_time, \
+                        total_model_train_time = metrics.tolist()
 
-            #     if args.rank == 0:
-            #         logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
-            #             train_loader)/args.world_size), total_samples * args.world_size / (time.time() - epoch_time_start), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, time.time() - epoch_time_start))
+                if args.rank == 0:
+                    logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
+                        train_loader)/args.world_size), total_samples * args.world_size / (time.time() - start_time), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, time.time() - start_time))
 
         torch.distributed.barrier()
         

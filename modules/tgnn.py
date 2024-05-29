@@ -337,7 +337,7 @@ class TGNN(torch.nn.Module):
         else:
             return updated_memory, all_nodes_unique, None
         
-    def prepare_input(self, b: DGLBlock, updated_memory: torch.tensor, overlap_nid: torch.tensor):
+    def prepare_input(self, b: DGLBlock, updated_memory: torch.tensor, overlap_nid: torch.tensor, input=None):
         device = b.device
         all_nodes = b.srcdata['ID']
 
@@ -345,11 +345,13 @@ class TGNN(torch.nn.Module):
             all_nodes.cpu(), return_inverse=True)
         
         pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes_unique.numpy(), overlap_nid.numpy()))
-
-        mem = self.memory.node_memory[pull_nodes].to(device)
-        mem_ts = self.memory.node_memory_ts[pull_nodes].to(device)
-        mail = self.memory.mailbox[pull_nodes].to(device)
-        mail_ts = self.memory.mailbox_ts[pull_nodes].to(device)
+        if input is None:
+            mem = self.memory.node_memory[pull_nodes].to(device)
+            mem_ts = self.memory.node_memory_ts[pull_nodes].to(device)
+            mail = self.memory.mailbox[pull_nodes].to(device)
+            mail_ts = self.memory.mailbox_ts[pull_nodes].to(device)
+        else:
+            mem, mem_ts, mail, mail_ts = input
         
         new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
         memory = torch.cat((updated_memory, new_memory), dim=0)

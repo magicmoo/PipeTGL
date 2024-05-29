@@ -109,7 +109,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
             update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
             
             if sends_thread != None:
-               sends_thread.join() 
+               sends_thread.join()
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src
