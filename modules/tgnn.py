@@ -344,14 +344,14 @@ class TGNN(torch.nn.Module):
         all_nodes_unique, _ = torch.unique(
             all_nodes.cpu(), return_inverse=True)
         
-        pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes_unique.numpy(), overlap_nid.numpy()))
         if input is None:
+            pull_nodes = torch.from_numpy(np.setdiff1d(all_nodes_unique.numpy(), overlap_nid.numpy()))
             mem = self.memory.node_memory[pull_nodes].to(device)
             mem_ts = self.memory.node_memory_ts[pull_nodes].to(device)
             mail = self.memory.mailbox[pull_nodes].to(device)
             mail_ts = self.memory.mailbox_ts[pull_nodes].to(device)
         else:
-            mem, mem_ts, mail, mail_ts = input
+            pull_nodes, mem, mem_ts, mail, mail_ts = input
         
         new_memory = self.memory_updater(mem, mail, mem_ts, mail_ts)
         memory = torch.cat((updated_memory, new_memory), dim=0)

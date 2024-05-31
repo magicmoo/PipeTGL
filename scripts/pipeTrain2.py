@@ -350,7 +350,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
     # warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
     
-    client = FetchClient(args.local_rank, args.rank, args.world_size, model, device, sampler, cache, model_data, groups)
+    client = FetchClient(args.local_rank, args.rank, args.world_size, len(train_loader), model, device, cache, model_data, groups)
     clientThread = None
     length = len(train_loader)
 
@@ -387,7 +387,10 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         target_nodes, ts, eid = next(train_iter)
         if args.local_rank == 0:
             print(f'data load time = {(time.time()-t1):.2f}')
-        q_input.put((target_nodes, ts, eid))
+        mfgs = sampler.sample(target_nodes, ts)
+        next_data = (mfgs, eid)
+
+        sampling_thread = None
         i = 0 
         
         global tb
@@ -397,20 +400,26 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         ttt = 0
         while True:
+            sample_start_time = time.perf_counter()
+            # Sampling for next batch
+            if sampling_thread is not None:
+                sampling_thread.join()
+            mfgs, eid = next_data
+            num_target_nodes = len(eid) * 3
+            q_input.put(next_data)
             try:
                 next_target_nodes, next_ts, next_eid = next(train_iter)
             except StopIteration:
                 break
-            q_input.put((next_target_nodes, next_ts, next_eid))
-            
-            sample_start_time = time.perf_counter()
-            # Sampling for next batch
+            sampling_thread = threading.Thread(target=sampling, args=(
+                next_target_nodes, next_ts, next_eid))
+            sampling_thread.start()
             total_sampling_time += time.perf_counter() - sample_start_time
-
             # Feature
             feature_start_time = time.perf_counter()
             # while client.train_status[0] == 0:
             #     pass
+            torch.cuda.synchronize()
             mfgs = q.get()
             client.train_status[0] = 0
             total_feature_fetch_time += time.perf_counter() - feature_start_time
@@ -421,13 +430,14 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             
             tmp = time.perf_counter()
             t1 = time.time()
+            # while client.train_status[1] == 0:
+            #     pass
+            torch.cuda.synchronize()
+            mem, mail = q.get()
             ttt += time.perf_counter() - tmp
             t2 = time.time()
             if args.use_memory:
                 b = mfgs[0][0]
-                # while client.train_status[1] == 0:
-                #     pass
-                mem, mail = q.get()
                 # print(iteration_now)
                 t3 = time.time()
                 push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
@@ -451,6 +461,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 b = mfgs[0][0]
                 # while client.train_status[2] == 0:
                 #     pass
+                torch.cuda.synchronize()
                 input = q.get()
                 client.train_status[2] = 0
                 model.prepare_input(b, updated_memory, overlap_nid, input)
@@ -460,7 +471,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             pred_pos, pred_neg = model(mfgs)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))
             loss += criterion(pred_neg, torch.zeros_like(pred_neg))
-            num_target_nodes = args.batch_size * 3
             total_loss += float(loss) * num_target_nodes
             loss.backward()
 
@@ -473,11 +483,21 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             #    sends_thread2.join()
             # while client.train_status[3] == 0:
             #     pass
-            params = q.get()
-            i = 0
-            for param in model.parameters():
-                param.data[:] = params[i][:]
-                i += 1
+            if sends_thread2 is not None:
+                sends_thread2.join()
+            params = [param.data for param in model.parameters()]
+            if args.rank!=0 or flag:
+                src = (args.rank-1+args.world_size)%args.world_size
+                idx = src + args.world_size
+                recv(params, src, groups[idx])
+            else:
+                pull_model(model, model_data, device=device)
+            # torch.cuda.synchronize()
+            # params = q.get()
+            # i = 0
+            # for param in model.parameters():
+            #     param.data[:] = params[i][:]
+            #     i += 1
             
             flag = True
             ttt += time.perf_counter() - tmp
@@ -491,10 +511,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
                 params = [param.data.clone() for param in model.parameters()]
-                # sends_thread2 = Process(target=send, args=(params, dst, groups[idx]))
                 sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
                 sends_thread2.start()
-                q_input.put(sends_thread2)
+                # q_input.put(sends_thread2)
                 client.train_status[3] = 0
             else:
                 push_model(model, model_data)
@@ -572,14 +591,14 @@ def send(tensors: list, target: int, group: object = None):
         # req.wait()
         # print(f'send1 finished: {args.rank}')
     else:
-        print(f'send2: {args.rank} at {time.perf_counter()-tb:.6f}')
+        # print(f'send2: {args.rank} at {time.perf_counter()-tb:.6f}')
         ops = []
         for tensor in tensors:
             ops.append(dist.P2POp(dist.isend, tensor, target, group))
         reqs = dist.batch_isend_irecv(ops)
         # for req in reqs:
         #     req.wait()
-        print(f'send2 finished: {args.rank}')
+        # print(f'send2 finished: {args.rank}')
     
     
 def recv(tensors: list, target: int, group: object = None):

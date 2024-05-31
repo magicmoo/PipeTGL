@@ -1,12 +1,564 @@
-import gnnflow
+import argparse
+from distutils.dep_util import newer_group
+import logging
+import math
+import os
+import random
+import threading
+import time
+import sys
+from venv import create
+path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(path)
+from viztracer import VizTracer
+import GPUtil
 
-tb_list=[0.02672600746154785, 0.019466638565063477, 0.018413066864013672, 0.017525672912597656, 0.017203092575073242, 0.017701387405395508, 0.017826318740844727, 0.017360687255859375, 0.017682790756225586, 0.01740407943725586, 0.018634319305419922, 0.01726388931274414, 0.014520406723022461, 0.016867399215698242, 0.017241716384887695, 0.01756739616394043, 0.017606019973754883, 0.016640901565551758, 0.017426490783691406, 0.017390966415405273, 0.017468929290771484, 0.017745256423950195, 0.017172813415527344, 0.017312288284301758, 0.017444133758544922, 0.017671823501586914, 0.016901731491088867, 0.016259431838989258, 0.019664287567138672, 0.017339706420898438, 0.017768383026123047, 0.017682790756225586, 0.017673969268798828, 0.017705202102661133, 0.01654648780822754, 0.018736600875854492, 0.01759052276611328, 0.01627349853515625, 0.01836681365966797, 0.017651796340942383, 0.017510414123535156, 0.018114089965820312, 0.0179903507232666, 0.01769256591796875, 0.018157243728637695, 0.02166008949279785, 0.01796126365661621, 0.01759481430053711, 0.017505645751953125, 0.01739025115966797, 0.017505407333374023, 0.017458200454711914, 0.017594575881958008, 0.017450332641601562, 0.01617741584777832, 0.018222570419311523, 0.017665863037109375, 0.017543792724609375, 0.01741647720336914, 0.01741504669189453, 0.01750016212463379, 0.01735520362854004, 0.017351865768432617, 0.017922639846801758, 0.01777172088623047, 0.018014907836914062, 0.015889883041381836, 0.017520666122436523, 0.017833232879638672, 0.017516613006591797, 0.017504215240478516, 0.01746678352355957, 0.017423152923583984, 0.018159866333007812, 0.018018007278442383, 0.016930103302001953, 0.017374277114868164, 0.017464160919189453, 0.01761627197265625, 0.017834901809692383, 0.017675161361694336, 0.017667055130004883, 0.015717267990112305, 0.01622486114501953, 0.01700282096862793, 0.017875194549560547, 0.019533157348632812, 0.017794370651245117, 0.017199039459228516, 0.018090009689331055, 0.017589807510375977, 0.015639066696166992, 0.01788187026977539, 0.017183542251586914, 0.01925039291381836, 0.016158103942871094, 0.01817488670349121, 0.017919063568115234, 0.01781940460205078, 0.01759791374206543, 0.015894651412963867, 0.016355037689208984, 0.015380859375, 0.0166473388671875, 0.017713546752929688, 0.01780223846435547, 0.01756882667541504, 0.015947580337524414, 0.022091388702392578, 0.018876075744628906, 0.01765751838684082, 0.018065929412841797, 0.017934322357177734, 0.015373706817626953, 0.01793384552001953, 0.01732635498046875, 0.016811132431030273, 0.015807628631591797, 0.017053842544555664, 0.017864704132080078, 0.01743030548095703, 0.017186403274536133, 0.01714801788330078, 0.017838001251220703, 0.018172502517700195, 0.017585277557373047, 0.015873432159423828, 0.0171661376953125, 0.01595330238342285, 0.015509843826293945, 0.016462326049804688, 0.01984691619873047, 0.019541025161743164, 0.01820659637451172, 0.014963865280151367, 0.01619696617126465, 0.014244318008422852, 0.01440286636352539, 0.013501405715942383, 0.015439271926879883, 0.01334381103515625, 0.015528678894042969, 0.01557016372680664, 0.01780414581298828, 0.017776966094970703, 0.018182992935180664, 0.01799774169921875, 0.017140865325927734, 0.017451047897338867, 0.017318248748779297, 0.01674675941467285, 0.017020702362060547, 0.017901897430419922, 0.01565408706665039, 0.01808619499206543, 0.01817035675048828, 0.01791667938232422, 0.01685357093811035, 0.017760038375854492, 0.01644730567932129, 0.015861988067626953, 0.01598644256591797, 0.015776395797729492, 0.01582932472229004, 0.01468968391418457, 0.01505422592163086, 0.014900922775268555, 0.015316009521484375, 0.015610218048095703, 0.015353202819824219, 0.015646934509277344, 0.01566004753112793, 0.015456914901733398, 0.015995264053344727, 0.015011787414550781, 0.01427316665649414, 0.015952110290527344, 0.015352249145507812, 0.015909671783447266, 0.015063047409057617, 0.016309261322021484, 0.015422344207763672, 0.015612363815307617, 0.014358758926391602, 0.015366077423095703, 0.01587677001953125, 0.01597142219543457, 0.0157625675201416, 0.01688218116760254, 0.016648054122924805, 0.017038583755493164, 0.016144752502441406, 0.017049074172973633, 0.01752018928527832, 0.017495155334472656, 0.017350196838378906, 0.017641067504882812, 0.01773977279663086, 0.017444610595703125, 0.017609357833862305, 0.01708984375, 0.017891645431518555, 0.017515897750854492, 0.017910242080688477, 0.01607823371887207, 0.016503095626831055, 0.016156911849975586, 0.01692509651184082, 0.017625808715820312, 0.017259597778320312, 0.01746344566345215, 0.01534271240234375, 0.01750493049621582, 0.01796126365661621, 0.01739192008972168, 0.015736103057861328, 0.016402006149291992, 0.016367435455322266, 0.017157793045043945, 0.01787734031677246, 0.015761375427246094, 0.015015125274658203, 0.017707347869873047, 0.01790475845336914, 0.017740488052368164, 0.01814436912536621, 0.017906665802001953, 0.016312599182128906, 0.016948699951171875, 0.01787710189819336, 0.01801156997680664, 0.01630854606628418, 0.017759323120117188, 0.0170135498046875, 0.01695847511291504, 0.018040895462036133, 0.017263174057006836, 0.016329050064086914, 0.016524553298950195, 0.017057180404663086, 0.01742243766784668, 0.01600503921508789, 0.017731904983520508, 0.017729997634887695, 0.01622295379638672, 0.01746368408203125, 0.017338275909423828, 0.017693042755126953, 0.017891407012939453, 0.017788171768188477, 0.01600503921508789, 0.017910003662109375, 0.01745319366455078, 0.017087221145629883, 0.01676654815673828, 0.01711416244506836, 0.016971826553344727, 0.016945600509643555, 0.0159759521484375, 0.0177915096282959, 0.018075942993164062, 0.015926837921142578, 0.01686692237854004, 0.01738119125366211, 0.015885114669799805, 0.017850637435913086, 0.015379190444946289, 0.01666736602783203, 0.01593017578125, 0.01758265495300293, 0.016756534576416016, 0.015889406204223633, 0.017586946487426758, 0.01880049705505371, 0.01742696762084961, 0.01746988296508789, 0.017233848571777344, 0.0180814266204834, 0.017434120178222656, 0.01786327362060547, 0.016007661819458008, 0.017805814743041992, 0.017783403396606445, 0.0194091796875, 0.019303321838378906, 0.017524242401123047, 0.017505884170532227, 0.017351150512695312, 0.017837047576904297, 0.017063617706298828, 0.01813030242919922, 0.017650604248046875, 0.016300201416015625, 0.017741680145263672, 0.01792740821838379, 0.017363786697387695, 0.017389535903930664, 0.01650071144104004, 0.016950607299804688, 0.01736760139465332, 0.017667293548583984, 0.017328500747680664, 0.01606273651123047, 0.01692795753479004, 0.016271114349365234, 0.016779184341430664, 0.015937328338623047, 0.015920639038085938, 0.01610565185546875, 0.015942811965942383, 0.01571059226989746, 0.016084671020507812, 0.016320228576660156, 0.015716552734375, 0.016099929809570312, 0.016107559204101562, 0.013185501098632812, 0.014698266983032227, 0.014125585556030273, 0.016188859939575195, 0.0161588191986084, 0.01613759994506836, 0.016086339950561523, 0.013699054718017578, 0.01402592658996582, 0.013157367706298828, 0.014867544174194336, 0.013933420181274414, 0.015059709548950195, 0.013842582702636719, 0.016176939010620117, 0.01633763313293457, 0.016010046005249023, 0.01420140266418457, 0.01546025276184082, 0.013458728790283203, 0.01574540138244629, 0.015455245971679688, 0.016452789306640625, 0.015204906463623047, 0.016252517700195312, 0.01617884635925293, 0.014403104782104492, 0.01540064811706543, 0.01397085189819336, 0.014148712158203125, 0.013924837112426758, 0.016097307205200195, 0.016111373901367188, 0.01618814468383789, 0.015766620635986328, 0.015177488327026367, 0.016070127487182617, 0.01573801040649414, 0.01612377166748047, 0.016085147857666016, 0.015655517578125, 0.01616525650024414, 0.016068220138549805, 0.014165163040161133, 0.015100955963134766, 0.01589226722717285, 0.016355037689208984, 0.015114068984985352, 0.014581918716430664, 0.014247417449951172, 0.014698028564453125, 0.01618504524230957, 0.016040563583374023, 0.016062021255493164, 0.016132593154907227, 0.01577281951904297, 0.01598381996154785, 0.01613020896911621, 0.01618027687072754, 0.014974832534790039, 0.014179468154907227, 0.014303207397460938, 0.014968633651733398, 0.015717267990112305, 0.01623368263244629, 0.016179561614990234, 0.015758037567138672, 0.016230344772338867, 0.01616978645324707, 0.014745950698852539, 0.01512455940246582, 0.015819072723388672, 0.01643967628479004, 0.014551877975463867, 0.01483464241027832, 0.016219139099121094, 0.015201807022094727, 0.01621723175048828, 0.01587224006652832, 0.016143083572387695, 0.015389442443847656, 0.016064167022705078, 0.016344547271728516, 0.016178607940673828, 0.016854524612426758, 0.016193628311157227, 0.01596689224243164, 0.016084671020507812, 0.015468835830688477, 0.01634526252746582, 0.015878677368164062, 0.01581549644470215, 0.015963315963745117, 0.01590561866760254, 0.015151262283325195, 0.016089677810668945, 0.016163110733032227, 0.015883684158325195, 0.015998125076293945, 0.015888452529907227, 0.015972137451171875, 0.01415562629699707, 0.01424860954284668, 0.01298213005065918, 0.014800786972045898, 0.013370037078857422, 0.014872074127197266, 0.014490365982055664, 0.016058921813964844, 0.01423192024230957, 0.014153480529785156, 0.014427423477172852, 0.014215707778930664, 0.014824867248535156, 0.014463663101196289, 0.01611495018005371, 0.01618218421936035, 0.015868663787841797, 0.01614522933959961, 0.01507258415222168, 0.014877080917358398, 0.016336441040039062, 0.014098405838012695, 0.014418363571166992, 0.014621257781982422, 0.016138792037963867, 0.016053199768066406, 0.014946460723876953, 0.014115571975708008, 0.016249895095825195, 0.01621389389038086, 0.01621556282043457, 0.016076087951660156, 0.013964414596557617, 0.014837980270385742, 0.0161592960357666, 0.01621532440185547, 0.01741480827331543, 0.01876664161682129, 0.017534494400024414, 0.017362117767333984, 0.01793360710144043, 0.017041921615600586, 0.01729130744934082, 0.016638755798339844, 0.01866888999938965, 0.017435312271118164, 0.017683029174804688, 0.017306089401245117, 0.016859769821166992, 0.018300294876098633, 0.01764988899230957, 0.018687725067138672, 0.015760421752929688]
-len = len(tb_list)
-x1, x2 = 0, 0
-for i in range(0, len//2):
-    x1 += tb_list[i]
+import numpy as np
+import torch
+import torch.distributed as dist
+import torch.nn
+import torch.nn.parallel
+import torch.utils.data
+import queue
+from sklearn.metrics import average_precision_score, roc_auc_score
+from torch.utils.data import BatchSampler, SequentialSampler
+from tqdm import tqdm
+from torch.multiprocessing import Process, Queue
+from dgl.utils.shared_mem import create_shared_mem_array, get_shared_mem_array
+import torch.multiprocessing as mp
 
-for i in range(len//2, len):
-    x2 += tb_list[i]
-print(x1)
-print(x2)
+import gnnflow.cache as caches
+from config import get_default_config
+from gnnflow.data import (EdgePredictionDataset,
+                          RandomStartBatchSampler, default_collate_ndarray)
+from modules.tgnn import TGNN
+from modules.sampler import DistributedBatchSampler
+from gnnflow.models.dgnn import DGNN
+from gnnflow.models.gat import GAT
+from gnnflow.models.graphsage import SAGE
+from gnnflow.temporal_sampler import TemporalSampler
+from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
+                           build_dynamic_graph, get_pinned_buffers,
+                           get_project_root_dir, load_dataset, load_feat,
+                           mfgs_to_cuda)
+from modules.util import push_model, pull_model
+from modules.FetchClient import FetchClient, startFetchClient
+
+datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
+model_names = ['TGNN']
+cache_names = sorted(name for name in caches.__dict__
+                     if not name.startswith("__")
+                     and callable(caches.__dict__[name]))
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--model", choices=model_names, default='TGNN',
+                    help="model architecture" + '|'.join(model_names))
+parser.add_argument("--data", choices=datasets, default='REDDIT',
+                    help="dataset:" + '|'.join(datasets))
+parser.add_argument("--epoch", help="maximum training epoch",
+                    type=int, default=50)
+parser.add_argument("--lr", help='learning rate', type=float, default=0.0001)
+parser.add_argument("--num-workers", help="num workers for dataloaders",
+                    type=int, default=1)
+parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
+                    type=int, default=1)
+parser.add_argument("--print-freq", help="print frequency",
+                    type=int, default=100)
+parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--ingestion-batch-size", type=int, default=1000,
+                    help="ingestion batch size")
+parser.add_argument("--edge-cache-ratio", type=float, default=0,
+                    help="cache ratio for edge feature cache")
+parser.add_argument("--node-cache-ratio", type=float, default=0,
+                    help="cache ratio for node feature cache")
+parser.add_argument("--snapshot-time-window", type=float, default=0,
+                    help="time window for sampling")
+parser.add_argument("--cache", choices=cache_names, default='LRUCache', help="feature cache:" +
+                    '|'.join(cache_names))
+
+args = parser.parse_args()
+logging.basicConfig(level=logging.DEBUG)
+logging.info(args)
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+set_seed(args.seed)
+
+def main():
+
+    args.distributed = True
+    args.local_rank = int(os.environ['LOCAL_RANK'])
+    args.local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
+    torch.cuda.set_device(args.local_rank)
+    dist.init_process_group('nccl')
+    args.rank = torch.distributed.get_rank()
+    args.world_size = torch.distributed.get_world_size()
+
+    logging.info("rank: {}, world_size: {}".format(args.rank, args.world_size))
+
+    model_config, data_config = get_default_config(args.model, args.data)
+    if model_config["snapshot_time_window"] > 0 and args.data == "GDELT":
+        model_config["snapshot_time_window"] = 25
+    else:
+        model_config["snapshot_time_window"] = args.snapshot_time_window
+    logging.info("snapshot_time_window's value is {}".format(model_config["snapshot_time_window"]))
+    args.use_memory = model_config['use_memory']
+
+    # graph is stored in shared memory
+    data_config["mem_resource_type"] = "shared"
+
+    data_path = '/data/TGL'
+    train_data, val_data, test_data, full_data = load_dataset(args.data, data_path)
+    
+    train_rand_sampler = DstRandEdgeSampler(
+        train_data['dst'].to_numpy(dtype=np.int32))
+    val_rand_sampler = DstRandEdgeSampler(
+        full_data['dst'].to_numpy(dtype=np.int32))
+    test_rand_sampler = DstRandEdgeSampler(
+        full_data['dst'].to_numpy(dtype=np.int32))
+
+    train_ds = EdgePredictionDataset(train_data, train_rand_sampler)
+    val_ds = EdgePredictionDataset(val_data, val_rand_sampler)
+    test_ds = EdgePredictionDataset(test_data, test_rand_sampler)
+    batch_size = model_config['batch_size']
+    args.batch_size = batch_size
+    # NB: learning rate is scaled by the number of workers
+    args.lr = args.lr * math.sqrt(args.world_size)
+    # args.lr = args.lr
+    logging.info("batch size: {}, lr: {}".format(batch_size, args.lr))
+
+    findOverlap_sampler = BatchSampler(
+            SequentialSampler(train_ds), batch_size=batch_size, drop_last=False)
+    train_sampler = DistributedBatchSampler(
+        SequentialSampler(train_ds), batch_size=batch_size,
+        drop_last=False, rank=args.rank, world_size=args.world_size,
+        num_chunks=args.num_chunks)
+    val_sampler = DistributedBatchSampler(
+        SequentialSampler(val_ds),
+        batch_size=batch_size, drop_last=False, rank=args.rank,
+        world_size=args.world_size)
+    test_sampler = DistributedBatchSampler(
+        SequentialSampler(test_ds),
+        batch_size=batch_size, drop_last=False, rank=args.rank,
+        world_size=args.world_size)
+
+    findOverlap_loader = torch.utils.data.DataLoader(
+        train_ds, sampler=findOverlap_sampler,
+        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
+    train_loader = torch.utils.data.DataLoader(
+        train_ds, sampler=train_sampler,
+        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
+    val_loader = torch.utils.data.DataLoader(
+        val_ds, sampler=val_sampler,
+        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
+    test_loader = torch.utils.data.DataLoader(
+        test_ds, sampler=test_sampler,  
+        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
+
+    dgraph = build_dynamic_graph(
+        **data_config, device=args.local_rank)
+
+    torch.distributed.barrier()
+    # insert in batch
+    for i in tqdm(range(0, len(full_data), args.ingestion_batch_size)):
+        batch = full_data[i:i + args.ingestion_batch_size]
+        src_nodes = batch["src"].values.astype(np.int64)
+        dst_nodes = batch["dst"].values.astype(np.int64)
+        timestamps = batch["time"].values.astype(np.float32)
+        eids = batch["eid"].values.astype(np.int64)
+        dgraph.add_edges(src_nodes, dst_nodes, timestamps,
+                         eids, add_reverse=False)
+        torch.distributed.barrier()
+
+    num_nodes = dgraph.max_vertex_id() + 1
+    num_edges = dgraph.num_edges()
+    # put the features in shared memory when using distributed training
+    node_feats, edge_feats = load_feat(
+        args.data, data_dir=data_path, shared_memory=args.distributed,
+        local_rank=args.local_rank, local_world_size=args.local_world_size)
+
+    dim_node = 0 if node_feats is None else node_feats.shape[1]
+    dim_edge = 0 if edge_feats is None else edge_feats.shape[1]
+
+    device = torch.device('cuda:{}'.format(args.local_rank))
+    logging.debug("device: {}".format(device))
+
+    model = TGNN(dim_node, dim_edge, **model_config, num_nodes=num_nodes,
+                    memory_device=device, memory_shared=args.distributed)
+    model.to(device)
+
+    model_data = []
+    i = 0
+    if args.local_rank == 0:
+        for param in model.parameters():
+            data = create_shared_mem_array('data'+str(i), param.data.shape, param.data.dtype)
+            model_data.append(data)
+            i += 1
+        dist.barrier()
+        push_model(model, model_data)
+    else:
+        dist.barrier()
+        for param in model.parameters():
+            data = get_shared_mem_array('data'+str(i), param.data.shape, param.data.dtype)
+            model_data.append(data)
+            i += 1
+    
+
+    sampler = TemporalSampler(dgraph, **model_config)
+
+    # model = torch.nn.parallel.DistributedDataParallel(
+    #     model, device_ids=[args.local_rank], find_unused_parameters=False)
+
+    pinned_nfeat_buffs, pinned_efeat_buffs = get_pinned_buffers(
+        model_config['fanouts'], model_config['num_snapshots'], batch_size,
+        dim_node, dim_edge)
+
+    # Cache
+    cache = caches.__dict__[args.cache](args.edge_cache_ratio, args.node_cache_ratio,
+                                        num_nodes, num_edges, device,
+                                        node_feats, edge_feats,
+                                        dim_node, dim_edge,
+                                        pinned_nfeat_buffs, 
+                                        pinned_efeat_buffs,
+                                        None,
+                                        False)
+
+    # only gnnlab static need to pass param
+    if args.cache == 'GNNLabStaticCache':
+        cache.init_cache(sampler=sampler, train_df=train_data,
+                         pre_sampling_rounds=2)
+    else:
+        cache.init_cache()
+    
+    logging.info("cache mem size: {:.2f} MB".format(
+        cache.get_mem_size() / 1000 / 1000))
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    criterion = torch.nn.BCEWithLogitsLoss()
+    model.memory.findOverlapMem(findOverlap_loader, batch_size*2, args.rank, args.world_size)
+
+    
+
+    best_e = train(train_loader, val_loader, sampler,
+                   model, optimizer, criterion, cache, device, model_data)
+    
+    
+
+    logging.info('Loading model at epoch {}...'.format(best_e))
+    
+    # metrics = torch.tensor([ap, auc], device=device)
+    # torch.distributed.all_reduce(metrics)
+    # metrics /= args.world_size
+    # ap, auc = metrics.tolist()
+    # if args.rank == 0:
+    #     logging.info('Test ap:{:4f}  test auc:{:4f}'.format(ap, auc))
+
+    torch.distributed.barrier()
+
+
+def train(train_loader, val_loader, sampler, model, optimizer, criterion,
+          cache, device, model_data):
+    best_ap = 0
+    best_e = 0
+    epoch_time_sum = 0
+    early_stopper = EarlyStopMonitor()
+
+    next_data = None
+
+    def sampling(target_nodes, ts, eid):
+        nonlocal next_data
+        mfgs = sampler.sample(target_nodes, ts)
+        next_data = (mfgs, eid)
+
+    logging.info('Start training...')
+    torch.distributed.barrier()
+
+    groups = []
+    auc_list, tb_list, loss_list = [], [], []
+    for i in range(args.world_size):
+        g = dist.new_group([i, (i+1)%args.world_size])
+        groups.append(g)
+    for i in range(args.world_size):
+        g = dist.new_group([i, (i+1)%args.world_size])
+        groups.append(g)
+
+    # warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
+    
+    client = FetchClient(args.local_rank, args.rank, args.world_size, len(train_loader), model, device, cache, model_data, groups)
+    clientThread = None
+    length = len(train_loader)
+
+
+    for e in range(args.epoch):
+        q = queue.Queue()
+        q_input = queue.Queue()
+        if clientThread is not None:
+            clientThread.join()
+        clientThread = threading.Thread(target=startFetchClient, args=(client, q, q_input))
+        clientThread.start()
+        start_time = time.time()
+        model.train()
+        cache.reset()
+        # if e > 0:
+        model.reset()
+        total_loss = 0
+        cache_edge_ratio_sum = 0
+        cache_node_ratio_sum = 0
+        total_sampling_time = 0
+        total_feature_fetch_time = 0
+        total_memory_update_time = 0
+        total_memory_write_back_time = 0
+        total_model_train_time = 0
+        total_model_update_time = 0
+        total_samples = 0
+        epoch_time = 0
+
+        flag = False
+        iteration_now = args.rank   
+
+        train_iter = iter(train_loader)
+        t1 = time.time()
+        target_nodes, ts, eid = next(train_iter)
+        if args.local_rank == 0:
+            print(f'data load time = {(time.time()-t1):.2f}')
+        mfgs = sampler.sample(target_nodes, ts)
+        next_data = (mfgs, eid)
+
+        sampling_thread = None
+        i = 0 
+        
+        global tb
+        tb = time.perf_counter()
+        sends_thread1 = None
+        sends_thread2 = None
+
+        ttt = 0
+        while True:
+            sample_start_time = time.perf_counter()
+            # Sampling for next batch
+            if sampling_thread is not None:
+                sampling_thread.join()
+            mfgs, eid = next_data
+            num_target_nodes = len(eid) * 3
+            q_input.put(next_data)
+            try:
+                next_target_nodes, next_ts, next_eid = next(train_iter)
+            except StopIteration:
+                break
+            sampling_thread = threading.Thread(target=sampling, args=(
+                next_target_nodes, next_ts, next_eid))
+            sampling_thread.start()
+            total_sampling_time += time.perf_counter() - sample_start_time
+
+            # Feature
+            feature_start_time = time.perf_counter()
+            # while client.train_status[0] == 0:
+            #     pass
+            torch.cuda.synchronize()
+            mfgs = q.get()
+            client.train_status[0] = 0
+            total_feature_fetch_time += time.perf_counter() - feature_start_time
+
+            update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
+
+            memory_update_start_time = time.perf_counter()
+            
+            tmp = time.perf_counter()
+            t1 = time.time()
+            # while client.train_status[1] == 0:
+            #     pass
+            torch.cuda.synchronize()
+            mem, mail = q.get()
+            ttt += time.perf_counter() - tmp
+            t2 = time.time()
+            if args.use_memory:
+                b = mfgs[0][0]
+                # print(iteration_now)
+                t3 = time.time()
+                push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
+                if iteration_now+1+args.world_size == int(length):
+                    push_msg, send_msg = None, None
+                idx = args.rank
+                updated_memory, overlap_nid, sends_thread1 = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
+                q_input.put(sends_thread1)
+                client.train_status[1] = 0
+                t4 = time.time()
+            t5 = time.time()
+            # print("--------------")
+            # print(t2-t1)
+            # print(t3-t2)
+            # print(t4-t3)
+            # print(t5-t4)
+            total_memory_update_time += time.perf_counter() - memory_update_start_time
+            
+            model_train_start_time = time.perf_counter()
+            if args.use_memory:
+                b = mfgs[0][0]
+                # while client.train_status[2] == 0:
+                #     pass
+                torch.cuda.synchronize()
+                input = q.get()
+                client.train_status[2] = 0
+                model.prepare_input(b, updated_memory, overlap_nid, input)
+            # Train
+            
+            optimizer.zero_grad()
+            pred_pos, pred_neg = model(mfgs)
+            loss = criterion(pred_pos, torch.ones_like(pred_pos))
+            loss += criterion(pred_neg, torch.zeros_like(pred_neg))
+            total_loss += float(loss) * num_target_nodes
+            loss.backward()
+
+            total_model_train_time += time.perf_counter() - model_train_start_time
+            model_update_start_time = time.perf_counter()
+
+            # transfer
+            tmp = time.perf_counter()
+            # if sends_thread2 != None:
+            #    sends_thread2.join()
+            # while client.train_status[3] == 0:
+            #     pass
+            torch.cuda.synchronize()
+            params = q.get()
+            i = 0
+            for param in model.parameters():
+                param.data[:] = params[i][:]
+                i += 1
+            
+            flag = True
+            ttt += time.perf_counter() - tmp
+
+            # update the model
+            optimizer.step()
+
+            total_model_update_time += time.perf_counter() - model_update_start_time
+
+            if iteration_now+1+args.world_size != int(length):
+                dst = (args.rank+1)%args.world_size
+                idx = args.rank + args.world_size
+                params = [param.data.clone() for param in model.parameters()]
+                # sends_thread2 = Process(target=send, args=(params, dst, groups[idx]))
+                sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
+                sends_thread2.start()
+                q_input.put(sends_thread2)
+                client.train_status[3] = 0
+            else:
+                push_model(model, model_data)
+            iteration_now += args.world_size
+
+            cache_edge_ratio_sum += cache.cache_edge_ratio
+            cache_node_ratio_sum += cache.cache_node_ratio
+            # total_samples += num_target_nodes
+            i += 1
+
+        epoch_time = time.time() - start_time
+        epoch_time_sum += epoch_time
+        # Validation
+        val_start = time.time()
+        val_ap, val_auc = 1.0, 1.0
+
+        val_res = torch.tensor([val_ap, val_auc]).to(device)
+        torch.distributed.all_reduce(val_res)
+        val_res /= args.world_size
+        val_ap, val_auc = val_res[0].item(), val_res[1].item()
+
+        val_end = time.time()
+        val_time = val_end - val_start
+
+        metrics = torch.tensor([val_ap, val_auc, cache_edge_ratio_sum,
+                                cache_node_ratio_sum, total_samples,
+                                total_sampling_time, total_feature_fetch_time,
+                                total_memory_update_time,
+                                total_memory_write_back_time,
+                                total_model_train_time,
+                                total_model_update_time]).to(device)
+        torch.distributed.all_reduce(metrics)
+        metrics /= args.world_size
+        val_ap, val_auc, cache_edge_ratio_sum, cache_node_ratio_sum, \
+            total_samples, total_sampling_time, total_feature_fetch_time, \
+            total_memory_update_time, total_memory_write_back_time, \
+            total_model_train_time, total_model_update_time = metrics.tolist()
+
+        if args.rank == 0:
+            logging.info("Epoch {:d}/{:d} | train loss {:.4f} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s".format(
+
+                e + 1, args.epoch, total_loss, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time, total_model_update_time))
+            print(ttt)
+            auc_list.append(val_auc)
+            loss_list.append(total_loss)
+            if len(tb_list) == 0:
+                tb_list.append(epoch_time)
+            else:
+                tb_list.append(epoch_time+tb_list[-1])
+        if args.rank == 0 and val_ap > best_ap:
+            best_e = e + 1
+            best_ap = val_ap
+            logging.info(
+                "Best val AP: {:.4f} & val AUC: {:.4f}".format(val_ap, val_auc))
+
+    if args.rank == 0:
+        logging.info('Avg epoch time: {}'.format(epoch_time_sum / args.epoch))
+        print(f'auc_list={auc_list}')
+        print(f'loss_list={loss_list}')
+        print(f'tb_list={tb_list}')
+
+    torch.distributed.barrier()
+
+    return best_e
+
+tb = 0
+
+def send(tensors: list, target: int, group: object = None):
+    
+    if tensors == None:
+        tensor = torch.tensor([args.local_rank]).to(f'cuda:{args.local_rank}')
+        # print(f'send1: {args.rank} {tensor}')
+        req = dist.isend(tensor, target, group)
+        # req.wait()
+        # print(f'send1 finished: {args.rank}')
+    else:
+        # print(f'send2: {args.rank} at {time.perf_counter()-tb:.6f}')
+        ops = []
+        for tensor in tensors:
+            ops.append(dist.P2POp(dist.isend, tensor, target, group))
+        reqs = dist.batch_isend_irecv(ops)
+        # for req in reqs:
+        #     req.wait()
+        # print(f'send2 finished: {args.rank}')
+    
+    
+def recv(tensors: list, target: int, group: object = None):
+    if tensors == None:
+        # print(f'recv1: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
+        tensor = torch.tensor([args.local_rank]).to(f'cuda:{args.local_rank}')
+        req = dist.irecv(tensor, target, group)
+        req.wait()
+        if tensor.sum() == target:
+            return True
+        else:
+            return False
+        # print(f'recv1 finished: {args.rank}, {tensor}')
+    else:
+        # print(f'recv2: {args.rank} from {target} at {time.perf_counter()-tb:.6f}')
+        ops = []
+        for tensor in tensors:
+            ops.append(dist.P2POp(dist.irecv, tensor, target, group))
+        reqs = dist.batch_isend_irecv(ops)
+        for req in reqs:
+            req.wait()
+        # print(f'recv2 finished: {args.rank}')
+
+if __name__ == '__main__':
+    if int(os.environ['LOCAL_RANK']) == 0:
+        tracer = VizTracer()
+        tracer.start()
+    main()
+
+    if int(os.environ['LOCAL_RANK']) == 0:
+        tracer.stop()
+        tracer.save()

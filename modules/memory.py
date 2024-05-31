@@ -59,14 +59,14 @@ class Memory:
 
             if not shared_memory:
                 self.node_memory = torch.zeros(
-                    (num_nodes, dim_memory), dtype=torch.float32, device=device)
+                    (num_nodes, dim_memory), dtype=torch.float32, device=device).pin_memory()
                 self.node_memory_ts = torch.zeros(
-                    num_nodes, dtype=torch.float32, device=device)
+                    num_nodes, dtype=torch.float32, device=device).pin_memory()
                 self.mailbox = torch.zeros(
                     (num_nodes, self.dim_raw_message),
-                    dtype=torch.float32, device=device)
+                    dtype=torch.float32, device=device).pin_memory()
                 self.mailbox_ts = torch.zeros(
-                    (num_nodes,), dtype=torch.float32, device=device)
+                    (num_nodes,), dtype=torch.float32, device=device).pin_memory()
             else:
                 if local_rank == 0:
                     self.node_memory = create_shared_mem_array(
@@ -212,8 +212,9 @@ class Memory:
             recv(None, rank, src, group)
 
         uncached_idx = self.pull_msg[iteration_now//world_size]
-        uncached_mem = self.node_memory[uncached_idx].to(device)
-        uncached_mail = self.mailbox[uncached_idx].to(device)
+        uncached_mem = self.node_memory[uncached_idx].to(device, non_blocking=True)
+        uncached_mail = self.mailbox[uncached_idx].to(device, non_blocking=True)
+        torch.cuda.synchronize()
         if cached_idx is not None and len(cached_idx) > 0:
             for req in reqs:
                 req.wait()

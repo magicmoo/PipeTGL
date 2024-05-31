@@ -374,7 +374,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
         sampling_thread = None
         flag = False
-        iteration_now = args.rank   
+        iteration_now = args.rank
 
         i = 0 
         

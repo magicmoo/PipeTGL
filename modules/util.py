@@ -33,14 +33,14 @@ def send(tensors: list, rank: int, target: int, group: object = None):
         # req.wait()
         # print(f'send1 finished: {rank}')
     else:
-        print(f'send2: {rank}')
+        # print(f'send2: {rank}')
         ops = []
         for tensor in tensors:
             ops.append(dist.P2POp(dist.isend, tensor, target, group))
         reqs = dist.batch_isend_irecv(ops)
         # for req in reqs:
         #     req.wait()
-        print(f'send2 finished: {rank}')
+        # print(f'send2 finished: {rank}')
     
     
 def recv(tensors: list, rank: int, target: int, group: object = None):
@@ -55,24 +55,24 @@ def recv(tensors: list, rank: int, target: int, group: object = None):
         else:
             return False
     else:
-        print(f'recv2: {rank} from {target}')
+        # print(f'recv2: {rank} from {target}')
         ops = []
         for tensor in tensors:
             ops.append(dist.P2POp(dist.irecv, tensor, target, group))
         reqs = dist.batch_isend_irecv(ops)
         for req in reqs:
             req.wait()
-        print(f'recv2 finished: {rank}')
+        # print(f'recv2 finished: {rank}')
 
 def recv_req(tensors: list, rank: int, target: int, group: object = None):
     # determine that tensors is a list
 
-    print(f'recv2: {rank} from {target}')
+    # print(f'recv2: {rank} from {target}')
     ops = []
     for tensor in tensors:
         ops.append(dist.P2POp(dist.irecv, tensor, target, group))
     reqs = dist.batch_isend_irecv(ops)
-    print(f'recv2 finished: {rank}')
+    # print(f'recv2 finished: {rank}')
     return reqs
     
 
