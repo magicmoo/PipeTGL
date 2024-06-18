@@ -2,6 +2,7 @@ import logging
 import os
 import random
 import time
+import gc
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -116,31 +117,35 @@ def load_feat(dataset: str, data_dir: Optional[str] = None,
     edge_feats = None
     if not shared_memory or (shared_memory and local_rank == 0):
         if os.path.exists(node_feat_path) and load_node:
-            raw_node_feats = torch.load(node_feat_path)
+            node_feats = torch.load(node_feat_path).to(torch.float16)
 
         if os.path.exists(edge_feat_path) and load_edge:
-            raw_edge_feats = torch.load(edge_feat_path)
+            edge_feats = torch.load(edge_feat_path).to(torch.float16)
 
     if shared_memory:
         node_feats_shm, edge_feats_shm = None, None
         if local_rank == 0:
             if node_feats is not None:
-                node_feats = raw_node_feats.to(torch.float32)
-                del raw_node_feats
+                # node_feats = node_feats.to(torch.float32)
                 node_feats_shm = create_shared_mem_array(
                     'node_feats', node_feats.shape, node_feats.dtype)
                 node_feats_shm[:] = node_feats[:]
             if edge_feats is not None:
-                edge_feats = raw_edge_feats.to(torch.float32)
-                del raw_edge_feats
+                print('debug3,', local_rank)
+                # edge_feats = edge_feats.to(torch.float32)
+                gc.collect()
+                print('debug4,', local_rank)
                 edge_feats_shm = create_shared_mem_array(
                     'edge_feats', edge_feats.shape, edge_feats.dtype)
+                print('debug5,', local_rank)
                 edge_feats_shm[:] = edge_feats[:]
             # broadcast the shape and dtype of the features
             node_feats_shape = node_feats.shape if node_feats is not None else None
             edge_feats_shape = edge_feats.shape if edge_feats is not None else None
             del node_feats
             del edge_feats
+            gc.collect()
+            print('debug6,', local_rank)
             torch.distributed.broadcast_object_list(
                 [node_feats_shape, edge_feats_shape], src=0)
 
@@ -151,10 +156,10 @@ def load_feat(dataset: str, data_dir: Optional[str] = None,
             node_feats_shape, edge_feats_shape = shapes
             if node_feats_shape is not None:
                 node_feats_shm = get_shared_mem_array(
-                    'node_feats', node_feats_shape, torch.float32)
+                    'node_feats', node_feats_shape, torch.float16)
             if edge_feats_shape is not None:
                 edge_feats_shm = get_shared_mem_array(
-                    'edge_feats', edge_feats_shape, torch.float32)
+                    'edge_feats', edge_feats_shape, torch.float16)
 
         torch.distributed.barrier()
         if node_feats_shm is not None:
@@ -166,5 +171,5 @@ def load_feat(dataset: str, data_dir: Optional[str] = None,
                 local_rank, edge_feats_shm.shape))
 
         return node_feats_shm, edge_feats_shm
-
-    return node_feats, edge_feats
+    
+    return node_feats_shm, edge_feats_shm

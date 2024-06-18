@@ -59,14 +59,14 @@ class Memory:
 
             if not shared_memory:
                 self.node_memory = torch.zeros(
-                    (num_nodes, dim_memory), dtype=torch.float32, device=device).pin_memory()
+                    (num_nodes, dim_memory), dtype=torch.float32, device=device)
                 self.node_memory_ts = torch.zeros(
-                    num_nodes, dtype=torch.float32, device=device).pin_memory()
+                    num_nodes, dtype=torch.float32, device=device)
                 self.mailbox = torch.zeros(
                     (num_nodes, self.dim_raw_message),
-                    dtype=torch.float32, device=device).pin_memory()
+                    dtype=torch.float32, device=device)
                 self.mailbox_ts = torch.zeros(
-                    (num_nodes,), dtype=torch.float32, device=device).pin_memory()
+                    (num_nodes,), dtype=torch.float32, device=device)
             else:
                 if local_rank == 0:
                     self.node_memory = create_shared_mem_array(
@@ -195,7 +195,7 @@ class Memory:
     def recv_mem(self, iteration_now, rank, world_size, device, group = None):
         # Returns the memory required for the current iteratio, the memory required for send to next iteration
         cached_idx = self.recv_msg[iteration_now//world_size]
-        if cached_idx is None:
+        if cached_idx is None or world_size==1:
             pass
         elif len(cached_idx) > 0:
             cached_mem = torch.empty([len(cached_idx), self.dim_memory], device=device)
