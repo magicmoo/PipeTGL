@@ -1,4 +1,5 @@
 import argparse
+from distutils.dep_util import newer_group
 import logging
 import math
 import os
@@ -18,6 +19,7 @@ import torch.distributed as dist
 import torch.nn
 import torch.nn.parallel
 import torch.utils.data
+import queue
 from sklearn.metrics import average_precision_score, roc_auc_score
 from torch.utils.data import BatchSampler, SequentialSampler
 from tqdm import tqdm
@@ -39,6 +41,8 @@ from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
                            build_dynamic_graph, get_pinned_buffers,
                            get_project_root_dir, load_dataset, load_feat,
                            mfgs_to_cuda)
+from modules.util import push_model, pull_model
+from modules.FetchClient import FetchClient, startFetchClient
 
 datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
 model_names = ['TGNN']
@@ -184,6 +188,7 @@ def main():
     val_ds = EdgePredictionDataset(val_data, val_rand_sampler)
     test_ds = EdgePredictionDataset(test_data, test_rand_sampler)
     batch_size = model_config['batch_size']
+    args.batch_size = batch_size
     # NB: learning rate is scaled by the number of workers
     args.lr = args.lr * math.sqrt(args.world_size)
     # args.lr = args.lr
@@ -343,9 +348,20 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         g = dist.new_group([i, (i+1)%args.world_size])
         groups.append(g)
 
-    warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
+    # warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
+    
+    client = FetchClient(args.local_rank, args.rank, args.world_size, len(train_loader), model, device, cache, model_data, groups)
+    clientThread = None
+    length = len(train_loader)
+
 
     for e in range(args.epoch):
+        q = queue.Queue()
+        q_input = queue.Queue()
+        if clientThread is not None:
+            clientThread.join()
+        clientThread = threading.Thread(target=startFetchClient, args=(client, q, q_input))
+        clientThread.start()
         start_time = time.time()
         model.train()
         cache.reset()
@@ -363,6 +379,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         total_samples = 0
         epoch_time = 0
 
+        flag = False
+        iteration_now = args.rank   
+
         train_iter = iter(train_loader)
         t1 = time.time()
         target_nodes, ts, eid = next(train_iter)
@@ -372,9 +391,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         next_data = (mfgs, eid)
 
         sampling_thread = None
-        flag = False
-        iteration_now = args.rank
-
         i = 0 
         
         global tb
@@ -385,13 +401,12 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         ttt = 0
         while True:
             sample_start_time = time.perf_counter()
+            # Sampling for next batch
             if sampling_thread is not None:
                 sampling_thread.join()
-
             mfgs, eid = next_data
             num_target_nodes = len(eid) * 3
-
-            # Sampling for next batch
+            q_input.put(next_data)
             try:
                 next_target_nodes, next_ts, next_eid = next(train_iter)
             except StopIteration:
@@ -400,12 +415,13 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 next_target_nodes, next_ts, next_eid))
             sampling_thread.start()
             total_sampling_time += time.perf_counter() - sample_start_time
-
             # Feature
             feature_start_time = time.perf_counter()
-            mfgs_to_cuda(mfgs, device)
-            mfgs = cache.fetch_feature(
-                mfgs, eid)
+            # while client.train_status[0] == 0:
+            #     pass
+            torch.cuda.synchronize()
+            mfgs = q.get()
+            client.train_status[0] = 0
             total_feature_fetch_time += time.perf_counter() - feature_start_time
 
             update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
@@ -414,21 +430,23 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             
             tmp = time.perf_counter()
             t1 = time.time()
-            if sends_thread1 != None:
-               sends_thread1.join()
+            # while client.train_status[1] == 0:
+            #     pass
+            torch.cuda.synchronize()
+            mem, mail = q.get()
             ttt += time.perf_counter() - tmp
             t2 = time.time()
             if args.use_memory:
                 b = mfgs[0][0]
-                idx = (args.rank-1+args.world_size)%args.world_size
-                mem, mail = model.memory.recv_mem(iteration_now, args.rank, args.world_size, device, groups[idx])
                 # print(iteration_now)
                 t3 = time.time()
                 push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
-                if iteration_now+1+args.world_size == int(len(train_loader)):
+                if iteration_now+1+args.world_size == int(length):
                     push_msg, send_msg = None, None
                 idx = args.rank
                 updated_memory, overlap_nid, sends_thread1 = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
+                q_input.put(sends_thread1)
+                client.train_status[1] = 0
                 t4 = time.time()
             t5 = time.time()
             # print("--------------")
@@ -441,7 +459,12 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             model_train_start_time = time.perf_counter()
             if args.use_memory:
                 b = mfgs[0][0]
-                model.prepare_input(b, updated_memory, overlap_nid)
+                # while client.train_status[2] == 0:
+                #     pass
+                torch.cuda.synchronize()
+                input = q.get()
+                client.train_status[2] = 0
+                model.prepare_input(b, updated_memory, overlap_nid, input)
             # Train
             
             optimizer.zero_grad()
@@ -456,15 +479,26 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             # transfer
             tmp = time.perf_counter()
-            if sends_thread2 != None:
-               sends_thread2.join() 
+            # if sends_thread2 != None:
+            #    sends_thread2.join()
+            # while client.train_status[3] == 0:
+            #     pass
+            if sends_thread2 is not None:
+                sends_thread2.join()
+            params = [param.data for param in model.parameters()]
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src + args.world_size
-                params = [param.data for param in model.parameters()]
                 recv(params, src, groups[idx])
             else:
-                pull_model(model, model_data)
+                pull_model(model, model_data, device=device)
+            # torch.cuda.synchronize()
+            # params = q.get()
+            # i = 0
+            # for param in model.parameters():
+            #     param.data[:] = params[i][:]
+            #     i += 1
+            
             flag = True
             ttt += time.perf_counter() - tmp
 
@@ -473,13 +507,14 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             total_model_update_time += time.perf_counter() - model_update_start_time
 
-            if iteration_now+1+args.world_size != int(len(train_loader)):
+            if iteration_now+1+args.world_size != int(length):
                 dst = (args.rank+1)%args.world_size
                 idx = args.rank + args.world_size
                 params = [param.data.clone() for param in model.parameters()]
-                # sends_thread2 = Process(target=send, args=(params, dst, groups[idx]))
                 sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
                 sends_thread2.start()
+                # q_input.put(sends_thread2)
+                client.train_status[3] = 0
             else:
                 push_model(model, model_data)
             iteration_now += args.world_size
@@ -546,18 +581,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     return best_e
 
 tb = 0
-
-def push_model(model, model_data):
-    i = 0
-    for param in model.parameters():
-        model_data[i][:] = param.data[:].to('cpu')
-        i += 1
-
-def pull_model(model, model_data):
-    i = 0
-    for param in model.parameters():
-        param.data[:] = model_data[i][:].to(f'cuda:{args.local_rank}')
-        i += 1
 
 def send(tensors: list, target: int, group: object = None):
     
@@ -628,7 +651,7 @@ def warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, m
 
     sampling_thread = None
     flag = False
-    iteration_now = args.rank
+    iteration_now = args.rank   
 
     i = 0 
     
@@ -721,7 +744,7 @@ def warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, m
         # total_samples += num_target_nodes
         i += 1
     
-    pull_model(model, model_data)
+    pull_model(model, model_data, device)
     # train_iter = iter(train_loader)
     # target_nodes, ts, eid = next(train_iter)
     # mfgs = sampler.sample(target_nodes, ts)

@@ -38,7 +38,7 @@ _tgn_default_config = {
     "dim_time": 100,
     "dim_embed": 100,
     "dim_memory": 100,
-    "batch_size": 3200
+    "batch_size": 1000
 }
 
 _tgnn_default_config = {
@@ -55,12 +55,12 @@ _tgnn_default_config = {
     "dim_time": 100,
     "dim_embed": 100,
     "dim_memory": 100,
-    "batch_size": 3200
+    "batch_size": 1000
 }
 
 _wiki_default_config = {
     "initial_pool_size": 10 * MiB,
-    "maximum_pool_size": 30 * MiB,
+    "maximum_pool_size": 1000 * MiB,
     "mem_resource_type": "cuda",
     "minimum_block_size": 18,
     "blocks_to_preallocate": 1024,
