@@ -495,19 +495,18 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         
         epoch_time = time.time()-start_time
         epoch_time_sum += epoch_time
-
-        # Validation
-        val_start = time.time()
-        # for param in model.parameters():
-        #     print(param.data)
-        #     break
-        val_ap, val_auc = evaluate(
-            val_loader, sampler, model, criterion, cache, device)
-        
-        val_end = time.time()
-        val_time = val_end - val_start
     
         if args.distributed and args.node_rank == 0:
+            # Validation
+            val_start = time.time()
+            # for param in model.parameters():
+            #     print(param.data)
+            #     break
+            val_ap, val_auc = evaluate(
+                val_loader, sampler, model, criterion, cache, device)
+            
+            val_end = time.time()
+            val_time = val_end - val_start
             metrics = torch.tensor([val_ap, val_auc, cache_edge_ratio_sum,
                                     cache_node_ratio_sum, total_samples,
                                     total_sampling_time, total_feature_fetch_time,
