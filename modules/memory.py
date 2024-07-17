@@ -179,20 +179,28 @@ class Memory:
             if last_nodes is not None:
                 self.recv_msg.append(torch.from_numpy(np.intersect1d(last_nodes, current_nodes)))
                 self.pull_msg.append(torch.from_numpy(np.setdiff1d(current_nodes, self.recv_msg[-1])))
+                # self.recv_msg.append(None)
+                # self.pull_msg.append(None)
             else:
                 self.recv_msg.append(None)
                 self.pull_msg.append(torch.from_numpy(current_nodes))
+                # self.recv_msg.append(None)
+                # self.pull_msg.append(None)
             if next_nodes is not None:
                 self.send_msg.append(torch.from_numpy(np.intersect1d(current_nodes, next_nodes)))
                 self.push_msg.append(torch.from_numpy(np.setdiff1d(current_nodes, self.send_msg[-1])))
+                # self.send_msg.append(None)
+                # self.push_msg.append(None)
             else:
                 self.send_msg.append(None)
                 self.push_msg.append(torch.from_numpy(current_nodes))
+                # self.send_msg.append(None)
+                # self.push_msg.append(None)
 
         # print(f'{rank}recv: ', [msg[:5] for msg in self.recv_msg[:5]])
         # print(f'{rank}send: ', [msg[:5] for msg in self.send_msg[:5]])
     
-    def recv_mem(self, iteration_now, rank, world_size, device, group = None):
+    def recv_mem(self, iteration_now, rank, world_size, device, group = None, src=-1):
         # Returns the memory required for the current iteratio, the memory required for send to next iteration
         cached_idx = self.recv_msg[iteration_now//world_size]
         if cached_idx is None or world_size==1:
@@ -200,7 +208,8 @@ class Memory:
         elif len(cached_idx) > 0:
             cached_mem = torch.empty([len(cached_idx), self.dim_memory], device=device)
             cached_mail = torch.empty([len(cached_idx), self.dim_raw_message], device=device)
-            src = (rank-1+world_size)% world_size
+            if src==-1:
+                src = (rank-1+world_size)% world_size
             t1 = time.time()
             reqs = recv_req([cached_mem, cached_mail], rank, src, group)
             # for req in reqs:
@@ -208,13 +217,14 @@ class Memory:
             # print(time.time()-t1)
             # print('debug2 ', cached_mem)
         else:
-            src = (rank-1+world_size)% world_size
+            if src==-1:
+                src = (rank-1+world_size)% world_size
             recv(None, rank, src, group)
 
         uncached_idx = self.pull_msg[iteration_now//world_size]
         uncached_mem = self.node_memory[uncached_idx].to(device, non_blocking=True)
         uncached_mail = self.mailbox[uncached_idx].to(device, non_blocking=True)
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         if cached_idx is not None and len(cached_idx) > 0:
             for req in reqs:
                 req.wait()
@@ -231,15 +241,17 @@ class Memory:
         mail = mail[idx_idx]
         return mem, mail
 
-    def send_mem(self, mem, mail, rank, world_size, group):
+    def send_mem(self, mem, mail, rank, world_size, group = None, dst = -1):
         if mem is None:
             send_thread = None
         elif mem.shape[0] > 0:
-            dst = (rank+1) % world_size
+            if dst==-1:
+                dst = (rank+1) % world_size
             send_thread = threading.Thread(target=send, args=([mem, mail], rank, dst, group))
             send_thread.start()
         else:
-            dst = (rank+1) % world_size
+            if dst==-1:
+                dst = (rank+1) % world_size
             send_thread = threading.Thread(target=send, args=(None, rank, dst, group))
             send_thread.start()
         return send_thread

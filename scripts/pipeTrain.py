@@ -396,9 +396,10 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 next_target_nodes, next_ts, next_eid = next(train_iter)
             except StopIteration:
                 break
-            sampling_thread = threading.Thread(target=sampling, args=(
-                next_target_nodes, next_ts, next_eid))
-            sampling_thread.start()
+            # sampling_thread = threading.Thread(target=sampling, args=(
+            #     next_target_nodes, next_ts, next_eid))
+            # sampling_thread.start()
+            sampling(next_target_nodes, next_ts, next_eid)
             total_sampling_time += time.perf_counter() - sample_start_time
 
             # Feature
@@ -414,8 +415,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             
             tmp = time.perf_counter()
             t1 = time.time()
-            if sends_thread1 != None:
-               sends_thread1.join()
+            if sends_thread2 != None:
+               sends_thread2.join()
             ttt += time.perf_counter() - tmp
             t2 = time.time()
             if args.use_memory:
@@ -456,8 +457,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             # transfer
             tmp = time.perf_counter()
-            if sends_thread2 != None:
-               sends_thread2.join() 
+            if sends_thread1 != None:
+               sends_thread1.join()
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src + args.world_size

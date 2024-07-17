@@ -43,6 +43,7 @@ from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
                            mfgs_to_cuda)
 from modules.util import push_model, pull_model
 from modules.FetchClient import FetchClient, startFetchClient
+from modules.SendClient import SendClient, startSendClient
 
 datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
 model_names = ['TGNN']
@@ -350,7 +351,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
     # warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
     
-    client = FetchClient(args.local_rank, args.rank, args.world_size, len(train_loader), model, device, cache, model_data, groups)
+    fetchClient = FetchClient(args.local_rank, args.rank, args.local_world_size, args.world_size, len(train_loader), model, device, cache, model_data, groups)
+    sendClient = SendClient(args.local_rank, args.rank, args.local_world_size, args.world_size, len(train_loader), device, model_data, groups)
     clientThread = None
     length = len(train_loader)
 
@@ -358,10 +360,14 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     for e in range(args.epoch):
         q = queue.Queue()
         q_input = queue.Queue()
+        q_send = queue.Queue()
+        q_syn = queue.Queue()
         if clientThread is not None:
             clientThread.join()
-        clientThread = threading.Thread(target=startFetchClient, args=(client, q, q_input))
+        clientThread = threading.Thread(target=startFetchClient, args=(fetchClient, q, q_input, q_syn))
         clientThread.start()
+        sendThread = threading.Thread(target=startSendClient, args=(sendClient, q_send, q_syn))
+        sendThread.start()
         start_time = time.time()
         model.train()
         cache.reset()
@@ -389,6 +395,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             print(f'data load time = {(time.time()-t1):.2f}')
         mfgs = sampler.sample(target_nodes, ts)
         next_data = (mfgs, eid)
+        q_input.put(next_data)
 
         sampling_thread = None
         i = 0 
@@ -404,24 +411,25 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             # Sampling for next batch
             if sampling_thread is not None:
                 sampling_thread.join()
-            mfgs, eid = next_data
-            num_target_nodes = len(eid) * 3
-            q_input.put(next_data)
             try:
                 next_target_nodes, next_ts, next_eid = next(train_iter)
             except StopIteration:
                 break
-            sampling_thread = threading.Thread(target=sampling, args=(
-                next_target_nodes, next_ts, next_eid))
-            sampling_thread.start()
+            mfgs, eid = next_data
+            num_target_nodes = len(eid) * 3
+            # sampling_thread = threading.Thread(target=sampling, args=(
+            #     next_target_nodes, next_ts, next_eid))
+            # sampling_thread.start()
+            sampling(next_target_nodes, next_ts, next_eid)
+            q_input.put(next_data)
+            
+
             total_sampling_time += time.perf_counter() - sample_start_time
             # Feature
             feature_start_time = time.perf_counter()
-            # while client.train_status[0] == 0:
-            #     pass
-            torch.cuda.synchronize()
+            
+            # torch.cuda.synchronize()
             mfgs = q.get()
-            client.train_status[0] = 0
             total_feature_fetch_time += time.perf_counter() - feature_start_time
 
             update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
@@ -430,23 +438,22 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             
             tmp = time.perf_counter()
             t1 = time.time()
-            # while client.train_status[1] == 0:
-            #     pass
-            torch.cuda.synchronize()
+            # torch.cuda.synchronize()
+        
             mem, mail = q.get()
+            # print(iteration_now)
+            
             ttt += time.perf_counter() - tmp
             t2 = time.time()
             if args.use_memory:
                 b = mfgs[0][0]
-                # print(iteration_now)
                 t3 = time.time()
                 push_msg, send_msg = model.memory.push_msg[iteration_now//args.world_size], model.memory.send_msg[iteration_now//args.world_size]
                 if iteration_now+1+args.world_size == int(length):
                     push_msg, send_msg = None, None
                 idx = args.rank
-                updated_memory, overlap_nid, sends_thread1 = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
-                q_input.put(sends_thread1)
-                client.train_status[1] = 0
+                updated_memory, overlap_nid, mem, mail = model.update_memory(b, update_length, mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
+                q_send.put((mem, mail))
                 t4 = time.time()
             t5 = time.time()
             # print("--------------")
@@ -459,14 +466,10 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             model_train_start_time = time.perf_counter()
             if args.use_memory:
                 b = mfgs[0][0]
-                # while client.train_status[2] == 0:
-                #     pass
-                torch.cuda.synchronize()
+                # torch.cuda.synchronize()
                 input = q.get()
-                client.train_status[2] = 0
                 model.prepare_input(b, updated_memory, overlap_nid, input)
             # Train
-            
             optimizer.zero_grad()
             pred_pos, pred_neg = model(mfgs)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))
@@ -481,42 +484,40 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             tmp = time.perf_counter()
             # if sends_thread2 != None:
             #    sends_thread2.join()
-            # while client.train_status[3] == 0:
-            #     pass
-            if sends_thread2 is not None:
-                sends_thread2.join()
-            params = [param.data for param in model.parameters()]
-            if args.rank!=0 or flag:
-                src = (args.rank-1+args.world_size)%args.world_size
-                idx = src + args.world_size
-                recv(params, src, groups[idx])
-            else:
-                pull_model(model, model_data, device=device)
+            # params = [param.data for param in model.parameters()]
+            # if args.rank!=0 or flag:
+            #     src = (args.rank-1+args.world_size)%args.world_size
+            #     idx = src + args.world_size
+            #     recv(params, src, groups[idx])
+            # else:
+            #     pull_model(model, model_data, device=device)
             # torch.cuda.synchronize()
-            # params = q.get()
-            # i = 0
-            # for param in model.parameters():
-            #     param.data[:] = params[i][:]
-            #     i += 1
+            params = q.get()
+            i = 0
+            for param in model.parameters():
+                param.data[:] = params[i][:]
+                i += 1
             
             flag = True
             ttt += time.perf_counter() - tmp
-
             # update the model
             optimizer.step()
 
             total_model_update_time += time.perf_counter() - model_update_start_time
 
-            if iteration_now+1+args.world_size != int(length):
-                dst = (args.rank+1)%args.world_size
-                idx = args.rank + args.world_size
-                params = [param.data.clone() for param in model.parameters()]
-                sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
-                sends_thread2.start()
-                # q_input.put(sends_thread2)
-                client.train_status[3] = 0
-            else:
-                push_model(model, model_data)
+            params = [param.data.clone() for param in model.parameters()]
+            q_send.put(params)
+            # torch.cuda.synchronize()
+            # print(iteration_now, 'debug5')
+            # if iteration_now+1+args.world_size != int(length):
+            #     dst = (args.rank+1)%args.world_size
+            #     idx = args.rank + args.world_size
+            #     params = [param.data.clone() for param in model.parameters()]
+            #     sends_thread2 = threading.Thread(target=send, args=(params, dst, groups[idx]))
+            #     sends_thread2.start()
+            #     q_input.put(sends_thread2)
+            # else:
+            #     push_model(model, model_data)
             iteration_now += args.world_size
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
