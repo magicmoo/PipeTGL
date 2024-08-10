@@ -34,6 +34,7 @@ class SendClient:
         self.groups = groups
         self.model_data = model_data
         self.next_data = None
+        self.stream = torch.cuda.Stream(device, -1)
 
         
         # if self.rank==0:
@@ -53,30 +54,35 @@ class SendClient:
 
     def start(self, q: Queue, q_syn: Queue):
         iteration_now = self.rank
+        stream = self.stream
         while True:
             if iteration_now + self.local_world_size >= self.cnt_interations:
                 break
-            mem, mail = q.get()
+            # mem, mail = q.get()
             # print('hello1', self.rank)
             # mem, mail = None, None
-            dst = (self.local_rank+1)%self.local_world_size + self.local_world_size*self.node_rank
-            group = self.groups[self.local_rank]
-            self.send_mem(mem, mail, dst, group, self.rank)
+            # stream.wait_stream(torch.cuda.current_stream())
+            # with torch.cuda.stream(stream):
+            #     dst = (self.local_rank+1)%self.local_world_size + self.local_world_size*self.node_rank
+            #     group = self.groups[self.local_rank]
+            #     self.send_mem(mem, mail, dst, group, self.rank)
+            # stream.synchronize()
+            # q_syn.put(None)
 
-            q_syn.put(None)
-            # print('hello2', self.rank)
+            # stream.wait_stream(torch.cuda.current_stream())
+            # with torch.cuda.stream(stream):
+            #     params = q.get()
+            #     group = self.groups[self.local_rank + self.local_world_size]
 
-            params = q.get()
-            group = self.groups[self.local_rank + self.local_world_size]
+            #     if iteration_now+1+self.local_world_size != int(self.cnt_interations):
+            #         send(None, self.rank, dst, group)
+            #     # else:
+            #     for i, param in enumerate(params):
+            #         self.model_data[i][:] = param[:]
+            # stream.synchronize()
+            # q_syn.put(None)
 
-            if iteration_now+1+self.local_world_size != int(self.cnt_interations):
-                send(params, self.rank, dst, group)
-            else:
-                for i, param in enumerate(params):
-                    self.model_data[i][:] = param[:]
-            
-            q_syn.put(None)
-            # print('hello3', self.rank)
+
             iteration_now += self.world_size
 
 

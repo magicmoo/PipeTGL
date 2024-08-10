@@ -45,7 +45,7 @@ def send(tensors: list, rank: int, target: int, group: object = None):
     
     
 def recv(tensors: list, rank: int, target: int, group: object = None):
-    if tensors == None:
+    if tensors is None:
         # print(f'recv1: {rank} from {target}')
         tensor = torch.tensor([rank]).to(f'cuda:{rank}')
         req = dist.irecv(tensor, target, group)

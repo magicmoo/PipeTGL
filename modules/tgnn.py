@@ -334,7 +334,7 @@ class TGNN(torch.nn.Module):
             return updated_memory, all_nodes_unique, None, None
     
     def update_memory_and_send(self, b: DGLBlock, length: int, rank: int, world_size: int, group, mem: torch.tensor = None, mail: torch.tensor = None, 
-                               push_msg: torch.tensor = None, send_msg: torch.tensor = None, edge_feats: Optional[torch.Tensor] = None):
+                               push_msg: torch.tensor = None, send_msg: torch.tensor = None, edge_feats: Optional[torch.Tensor] = None, node_dst=-1):
         t1 = time.time()
         device = b.device
         all_nodes = b.srcdata['ID'][:length]
@@ -435,7 +435,7 @@ class TGNN(torch.nn.Module):
         if send_msg is not None:
             idx = torch.searchsorted(nid, send_msg.to(device))
             # print(send_msg.shape[0] / nid.shape[0])
-            sends_thread1 = self.memory.send_mem(mem[idx], mail[idx], rank, world_size, group)
+            sends_thread1 = self.memory.send_mem(mem[idx], mail[idx], rank, world_size, group, dst=node_dst)
             # self.memory.node_memory[nid[idx]] = mem[idx].to(self.memory.device)
             # self.memory.mailbox[nid[idx]] = mail[idx].to(self.memory.device)
             return updated_memory, all_nodes_unique, sends_thread1

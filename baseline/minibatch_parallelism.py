@@ -54,9 +54,9 @@ parser.add_argument("--num-workers", help="num workers for dataloaders",
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
-                    type=int, default=20)
+                    type=int, default=200)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
+parser.add_argument("--ingestion-batch-size", type=int, default=1000,
                     help="ingestion batch size")
 
 # optimization
@@ -494,7 +494,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                         train_loader)/args.world_size), total_samples * args.world_size / (time.time() - start_time), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, time.time() - start_time))
 
         torch.distributed.barrier()
-        
+        torch.cuda.synchronize()
         epoch_time = time.time()-start_time
         epoch_time_sum += epoch_time
 

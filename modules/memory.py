@@ -222,9 +222,9 @@ class Memory:
             recv(None, rank, src, group)
 
         uncached_idx = self.pull_msg[iteration_now//world_size]
-        uncached_mem = self.node_memory[uncached_idx].to(device, non_blocking=True)
-        uncached_mail = self.mailbox[uncached_idx].to(device, non_blocking=True)
-        # torch.cuda.synchronize()
+        uncached_mem = self.node_memory[uncached_idx].to(device)
+        uncached_mail = self.mailbox[uncached_idx].to(device)
+
         if cached_idx is not None and len(cached_idx) > 0:
             for req in reqs:
                 req.wait()
@@ -235,6 +235,7 @@ class Memory:
             idx = uncached_idx
             mem = uncached_mem
             mail = uncached_mail
+
 
         idx_idx = np.argsort(idx)
         mem = mem[idx_idx]
