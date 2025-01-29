@@ -60,7 +60,7 @@ parser.add_argument("--num-workers", help="num workers for dataloaders",
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
-                    type=int, default=2000)
+                    type=int, default=500)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
@@ -315,11 +315,6 @@ def main():
         model.module.load_state_dict(ckpt['model'])
     else:
         model.load_state_dict(ckpt['model'])
-    if args.use_memory:
-        if args.distributed:
-            model.module.memory.restore(ckpt['memory'])
-        else:
-            model.memory.restore(ckpt['memory'])
 
     ap, auc = 1.0, 1.0
     if args.distributed:
@@ -358,6 +353,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         torch.distributed.barrier()
 
     auc_list, tb_list, loss_list = [], [], []
+    ttt1, ttt2 = 0, 0
     for e in range(args.epoch):
         start_time = time.time()
         model.train()
@@ -374,7 +370,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         total_feature_fetch_time = 0
         total_memory_fetch_time = 0
         total_memory_update_time = 0
-        total_memory_write_back_time = 0
+        total_supporting_memory_update_time = 0
+        total_model_update_time = 0
         total_model_train_time = 0
         total_samples = 0
         epoch_time = 0
@@ -419,29 +416,39 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             if args.use_memory:
                 b = mfgs[0][0]
                 if args.distributed:
+                    torch.cuda.synchronize()
                     memory_update_start_time = time.time()
                     updated_memory, overlap_nodes = model.module.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                    torch.cuda.synchronize()
                     total_memory_update_time += time.time() - memory_update_start_time
                 else:
+                    torch.cuda.synchronize()
                     memory_update_start_time = time.time()
                     updated_memory, overlap_nodes = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+                    torch.cuda.synchronize()
                     total_memory_update_time += time.time() - memory_update_start_time
 
             # Train
 
-            model_train_start_time = time.time()
+            t1 = time.time()
             if args.use_memory:
                 b = mfgs[0][0]
                 if args.distributed:
                     model.module.prepare_input(b, updated_memory, overlap_nodes)
+                else:
+                    model.prepare_input(b, updated_memory, overlap_nodes)
+            total_supporting_memory_update_time += time.time() - t1
+            model_train_start_time = time.time()
             optimizer.zero_grad()
             pred_pos, pred_neg = model(mfgs)
             loss = criterion(pred_pos, torch.ones_like(pred_pos))
             loss += criterion(pred_neg, torch.zeros_like(pred_neg))
             total_loss += float(loss) * num_target_nodes
             loss.backward()
-            optimizer.step()
             total_model_train_time += time.time() - model_train_start_time
+            t1 = time.time()
+            optimizer.step()
+            total_model_update_time += time.time() - t1
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
@@ -454,19 +461,20 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                                             cache_node_ratio_sum, total_samples,
                                             total_sampling_time, total_feature_fetch_time,
                                             total_memory_update_time,
-                                            total_memory_write_back_time,
+                                            total_model_update_time,
+                                            total_supporting_memory_update_time,
                                             total_model_train_time
                                             ]).to(device)
                     torch.distributed.all_reduce(metrics)
                     metrics /= args.world_size
                     total_loss, cache_edge_ratio_sum, cache_node_ratio_sum, \
                         total_samples, total_sampling_time, total_feature_fetch_time, \
-                        total_memory_update_time, total_memory_write_back_time, \
+                        total_memory_update_time, total_model_update_time, total_supporting_memory_update_time, \
                         total_model_train_time = metrics.tolist()
 
                 if args.rank == 0:
-                    logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
-                        train_loader)/args.world_size), total_samples * args.world_size / (time.time() - start_time), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, time.time() - start_time))
+                    logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Supporting Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
+                        train_loader)/args.world_size), total_samples * args.world_size / (time.time() - start_time), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_supporting_memory_update_time, total_model_train_time, total_model_update_time, time.time() - start_time))
 
         epoch_time = time.time() - start_time
         epoch_time_sum += epoch_time
@@ -489,19 +497,23 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                                     cache_node_ratio_sum, total_samples,
                                     total_sampling_time, total_feature_fetch_time,
                                     total_memory_update_time,
-                                    total_memory_write_back_time,
+                                    total_model_update_time,
+                                    total_supporting_memory_update_time,
                                     total_model_train_time]).to(device)
             torch.distributed.all_reduce(metrics)
             metrics /= args.world_size
             val_ap, val_auc, cache_edge_ratio_sum, cache_node_ratio_sum, \
                 total_samples, total_sampling_time, total_feature_fetch_time, \
-                total_memory_update_time, total_memory_write_back_time, \
+                total_memory_update_time, total_model_update_time,total_supporting_memory_update_time, \
                 total_model_train_time = metrics.tolist()
 
         if args.rank == 0:
-            logging.info("Epoch {:d}/{:d} | train loss {:.4f} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s".format(
+            if e>0:
+                ttt1 += total_memory_update_time
+                ttt2 += total_model_update_time
+            logging.info("Epoch {:d}/{:d} | train loss {:.4f} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Supporting Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s".format(
 
-                e + 1, args.epoch, total_loss, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time))
+                e + 1, args.epoch, total_loss, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_supporting_memory_update_time, total_model_train_time, total_model_update_time))
             auc_list.append(val_auc)
             loss_list.append(total_loss)
             if len(tb_list) == 0:
@@ -526,11 +538,13 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         # if early_stopper.early_stop_check(val_ap):
         #     logging.info("Early stop at epoch {}".format(e))
         #     break
+    
     if args.rank == 0:
+        # print(ttt1/(args.epoch-1), ttt2/(args.epoch-1))
         logging.info('Avg epoch time: {}'.format(epoch_time_sum / args.epoch))
-        print(f'auc_list={auc_list}')
-        print(f'loss_list={loss_list}')
-        print(f'tb_list={tb_list}')
+        # print(f'auc_list={auc_list}')
+        # print(f'loss_list={loss_list}')
+        # print(f'tb_list={tb_list}')
     if args.rank == 0:
         logging.info('Avg epoch time: {}'.format(epoch_time_sum / args.epoch))
 

@@ -1,40 +1,23 @@
-import torch
-import torch.distributed as dist
-import os
-import datetime
-import sys
-path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(path)
-from modules.util import load_feat
+import matplotlib.pyplot as plt
+from scipy.signal import savgol_filter
 
-print('hello')
-if __name__ == '__main__':
-    rank = int(os.environ['RANK'])
-    world_size = int(os.environ['WORLD_SIZE'])
-    # ip = os.environ['MASTER_ADDR']
-    # print(ip)
-    os.environ['MASTER_ADDR'] = '192.168.122.101'
-    os.environ['MASTER_PORT'] = '29500'
-    print(f'debug {rank}/{world_size}')
-    dist.init_process_group('nccl')
-    local_rank = int(os.environ['LOCAL_RANK'])
-    local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
-    # torch.cuda.set_device(local_rank)
-    print(f'{rank}/{world_size}, {local_rank}')
+# 示例数据
+x1 = [1, 1.3, 1.5, 1.6, 1.7, 1.8, 1.9, 2]
+x2 = [1, 1.3, 1.5, 1.6, 1.7, 1.8, 1.9, 2]
+x3 = [1, 1.3, 1.5, 1.6, 1.7, 1.8, 1.9, 2]
+# y1 = [0.259, 0.304, 0.336, 0.460, 1.426, 17.531, 35.226, 49.065]
+# y2 = [0.472, 0.795, 1.479, 2.569, 6.719, 21.784, 38.712, 56.057]
+# y3 = [0.361, 0.496, 0.646, 0.768, 0.977, 2.513, 11.698, 27.362]
+y1 = [0.581, 0.853, 1.091, 1.124, 1.038, 1.015, 0.973, 0.991]
+y2 = [0.088, 0.101, 0.108, 0.112, 0.113, 0.114, 0.115, 0.115]
+y3 = [0.139, 0.154, 0.165, 0.172, 0.180, 0.184, 0.186, 0.186]
+# 调用函数绘制折线图
+plt.figure()
+plt.plot(x1, y1, label='vllm')
+plt.plot(x2, y2, label='sarathi(512)')
+plt.plot(x3, y3, label='sarathi(1024)')
+plt.legend()
+plt.xlabel('rps')
+plt.ylabel('TBT')
 
-    dist.barrier()
-
-    if rank==0:
-        shapes = [torch.tensor(123), torch.tensor(321)]
-        torch.distributed.broadcast_object_list(
-                shapes, src=0)
-    else:
-        shapes = [None, None]
-        torch.distributed.broadcast_object_list(
-                shapes, src=0)
-    print(shapes)
-
-    # node_feats, edge_feats = load_feat(
-    #     'REDDIT', data_dir='/data/TGL', shared_memory=True,
-    #     local_rank=local_rank, local_world_size=local_world_size)
-    
+plt.savefig('./img/img.jpg')

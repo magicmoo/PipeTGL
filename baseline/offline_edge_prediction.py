@@ -190,9 +190,7 @@ def main():
 
     # data_path = os.path.join(path, 'data')
     data_path = '/data/TGL'
-    print('debug1')
     train_data, val_data, test_data, full_data = load_dataset(args.data, data_dir=data_path)
-    print('debug2')
     train_rand_sampler = DstRandEdgeSampler(
         train_data['dst'].to_numpy(dtype=np.int32))
     val_rand_sampler = DstRandEdgeSampler(
@@ -401,6 +399,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         sampling_thread = None
 
         i = 0
+        workloads = []
         while True:
             sample_start_time = time.time()
             if sampling_thread is not None:
@@ -408,10 +407,11 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             mfgs, eid = next_data
             num_target_nodes = len(eid) * 3
-
+            workloads.append(mfgs[0][0].edata['ID'].shape[0])
             # Sampling for next batch
             try:
                 next_target_nodes, next_ts, next_eid = next(train_iter)
+
             except StopIteration:
                 break
             sampling_thread = threading.Thread(target=sampling, args=(

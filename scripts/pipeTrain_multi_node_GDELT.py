@@ -39,12 +39,13 @@ from gnnflow.models.graphsage import SAGE
 from gnnflow.temporal_sampler import TemporalSampler
 from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
                            build_dynamic_graph, get_pinned_buffers,
-                           get_project_root_dir, load_dataset, load_feat,
+                           get_project_root_dir, load_dataset,
                            mfgs_to_cuda)
 from modules.util import push_model, pull_model
 from modules.FetchClient import FetchClient, startFetchClient
 from modules.SendClient import SendClient, startSendClient
 from modules.IOProcess import start_IOProcess
+from modules.util import save_memory, put_memory, load_feat
 
 datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
 model_names = ['TGNN']
@@ -58,16 +59,16 @@ parser.add_argument("--model", choices=model_names, default='TGNN',
 parser.add_argument("--data", choices=datasets, default='REDDIT',
                     help="dataset:" + '|'.join(datasets))
 parser.add_argument("--epoch", help="maximum training epoch",
-                    type=int, default=100)
+                    type=int, default=5)
 parser.add_argument("--lr", help='learning rate', type=float, default=0.0001)
 parser.add_argument("--num-workers", help="num workers for dataloaders",
                     type=int, default=1)
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
-                    type=int, default=100)
+                    type=int, default=50)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ingestion-batch-size", type=int, default=1000,
+parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
 parser.add_argument("--edge-cache-ratio", type=float, default=0,
                     help="cache ratio for edge feature cache")
@@ -93,19 +94,24 @@ set_seed(args.seed)
 
 
 def evaluate(dataloader, sampler, model, criterion, cache, device, groups, local_group):
-    dist.barrier(group=local_group)
+    # dist.barrier(group=local_group)
+    if args.local_rank == 0:
+        input = save_memory(model)
     model.eval()
+    model.reset()
     val_losses = list()
     aps = list()
     aucs_mrrs = list()
-
-    sign = True
     flag = False
     iteration_now = args.local_rank
     sends_thread = None
+    cnt = 0
     with torch.no_grad():
         total_loss = 0
         for target_nodes, ts, eid in dataloader:
+            cnt += 1
+            if cnt>250:
+                break
             mfgs = sampler.sample(target_nodes, ts)
             mfgs_to_cuda(mfgs, device)
             mfgs = cache.fetch_feature(
@@ -114,7 +120,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups, local
             update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
             
             if sends_thread != None:
-               sends_thread.join() 
+               sends_thread.join()
             if args.local_rank!=0 or flag:
                 src = (args.local_rank-1+args.local_world_size)%args.local_world_size + args.local_world_size*args.node_rank
                 idx = (args.local_rank-1+args.local_world_size)%args.local_world_size
@@ -124,7 +130,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups, local
                 b = mfgs[0][0]
                 updated_memory, overlap_nodes = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
 
-            if iteration_now+1 != int(len(dataloader)):
+            if iteration_now+1 != int(len(dataloader)) and not (args.local_rank+1==args.local_world_size and cnt==iteration_now):
                 dst = (args.local_rank+1)%args.local_world_size + args.local_world_size*args.node_rank
                 idx = args.local_rank
                 sends_thread = threading.Thread(target=send, args=(None, dst, groups[idx]))
@@ -151,6 +157,9 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups, local
 
     ap = float(torch.tensor(aps).mean())
     auc_mrr = float(torch.tensor(aucs_mrrs).mean())
+    # dist.barrier(local_group)
+    if args.local_rank == 0:
+        put_memory(input, model)
     return ap, auc_mrr
 
 def main():
@@ -164,6 +173,13 @@ def main():
     args.world_size = torch.distributed.get_world_size()
     args.node_rank = args.rank//args.local_world_size
     args.num_nodes = args.world_size // args.local_world_size
+    for i in range(args.num_nodes):
+        if i==args.node_rank:
+            local_group = dist.new_group([rank for rank in range(args.local_world_size*args.node_rank, args.local_world_size*(args.node_rank+1))])
+        else:
+            dist.new_group([rank for rank in range(args.local_world_size*i, args.local_world_size*(i+1))])
+    num_gpus = torch.tensor(data=(1), device=f'cuda:{args.local_rank}')
+    dist.all_reduce(num_gpus, op=dist.ReduceOp.SUM)
 
     logging.info("rank: {}, world_size: {}".format(args.rank, args.world_size))
 
@@ -220,10 +236,10 @@ def main():
         train_ds, sampler=train_sampler, pin_memory=True,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, sampler=val_sampler,
+        val_ds, sampler=val_sampler, pin_memory=True,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     test_loader = torch.utils.data.DataLoader(
-        test_ds, sampler=test_sampler,  
+        test_ds, sampler=test_sampler, pin_memory=True,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
 
     dgraph = build_dynamic_graph(
@@ -245,7 +261,7 @@ def main():
     num_edges = dgraph.num_edges()
     # put the features in shared memory when using distributed training
     node_feats, edge_feats = load_feat(
-        args.data, data_dir=data_path, shared_memory=args.distributed,
+        args.data, data_dir=data_path, shared_memory=args.distributed, rank = args.rank,
         local_rank=args.local_rank, local_world_size=args.local_world_size)
 
     dim_node = 0 if node_feats is None else node_feats.shape[1]
@@ -309,7 +325,7 @@ def main():
     model.memory.findOverlapMem(findOverlap_loader, batch_size*2, args.local_rank, args.local_world_size)
 
     best_e = train(train_loader, val_loader, sampler,
-                   model, optimizer, criterion, cache, device, model_data, node_feats, edge_feats)
+                   model, optimizer, criterion, cache, device, model_data, node_feats, edge_feats, local_group)
 
     logging.info('Loading model at epoch {}...'.format(best_e))
 
@@ -327,8 +343,7 @@ def main():
 
 
 def train(train_loader, val_loader, sampler, model, optimizer, criterion,
-          cache, device, model_data, node_feats, edge_feats):
-    local_group = dist.new_group([i + args.local_world_size * args.node_rank for i in range(args.local_world_size)])
+          cache, device, model_data, node_feats, edge_feats, local_group):
     best_ap = 0
     best_e = 0
     epoch_time_sum = 0
@@ -367,7 +382,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     fetchThread.start()
     process = Process(target=start_IOProcess, args=(fetchClient.IOClient, fetchClient.event1, fetchClient.event2))
     process.start()
-    warm_up(train_loader, val_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups, fetchClient, q_input, grad_group)
+    # warm_up(train_loader, val_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups, fetchClient, q_input, grad_group)
     dist.barrier()
     length = len(train_loader)
     per_length = int(length // args.local_world_size)
@@ -408,6 +423,8 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         iteration_now = args.local_rank
 
         i = 0 
+        if e == 0:
+            i = int(per_length//args.num_nodes*args.node_rank)
         
         global tb
         tb = time.perf_counter()
@@ -415,7 +432,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         sends_thread2 = None
 
         ttt = 0
+        epoch_time += time.time()-start_time
         while True:
+            start_time = time.time()
             sample_start_time = time.perf_counter()
             if sampling_thread is not None:
                 sampling_thread.join()
@@ -470,10 +489,15 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 b = mfgs[0][0]
                 src = (args.local_rank-1+args.local_world_size)%args.local_world_size + args.local_world_size*args.node_rank
                 idx = (args.local_rank-1+args.local_world_size)%args.local_world_size
-                mem, mail = model.memory.recv_mem(iteration_now, args.local_rank, args.local_world_size, device, groups[idx], src=src)
+                if (i+1) % args.print_freq == 0 and args.local_rank==0 and args.node_rank == 0:
+                    mem, mail = None, None
+                else:
+                    mem, mail = model.memory.recv_mem(iteration_now, args.local_rank, args.local_world_size, device, groups[idx], src=src)
                 t3 = time.time()
                 push_msg, send_msg = model.memory.push_msg[iteration_now//args.local_world_size], model.memory.send_msg[iteration_now//args.local_world_size]
                 if iteration_now+1+args.local_world_size == int(len(train_loader)):
+                    push_msg, send_msg = None, None
+                if (i+2) % args.print_freq == 0 and (args.local_rank+1)==(args.local_world_size) and args.node_rank == 0:
                     push_msg, send_msg = None, None
                 dst = (args.local_rank+1)%args.local_world_size + args.local_world_size*args.node_rank
                 idx = args.local_rank
@@ -504,7 +528,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             if sends_thread1 != None:
                sends_thread1.join()
             syn_model(model, 1, grad_group)
-            if args.local_rank!=0 or flag:
+            if (i+1) % args.print_freq == 0 and args.local_rank==0 and args.node_rank == 0:
+                pull_model(model, model_data)
+            elif args.local_rank!=0 or flag:
                 src = (args.local_rank-1+args.local_world_size)%args.local_world_size + args.local_world_size*args.node_rank
                 idx = (args.local_rank-1+args.local_world_size)%args.local_world_size + args.local_world_size
                 params = [param.data for param in model.parameters()]
@@ -518,7 +544,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             optimizer.step()
             total_model_update_time += time.perf_counter() - model_update_start_time
 
-            if iteration_now+1+args.local_world_size != int(len(train_loader)):
+            if (i+2) % args.print_freq == 0 and (args.local_rank+1)==(args.local_world_size) and args.node_rank == 0:
+                push_model(model, model_data)
+            elif iteration_now+1+args.local_world_size != int(len(train_loader)):
                 dst = (args.local_rank+1)%args.local_world_size + args.local_world_size*args.node_rank
                 idx = args.local_rank + args.local_world_size
                 params = [param.data.clone() for param in model.parameters()]
@@ -529,12 +557,40 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 push_model(model, model_data)
             iteration_now += args.local_world_size
 
-            cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
             # total_samples += num_target_nodes
             i += 1
+            epoch_time += time.time() - start_time
 
-        epoch_time = time.time() - start_time
+            if (i+1) % args.print_freq == 0 and args.node_rank == 0:
+                val_ap, val_auc = evaluate(
+                val_loader, sampler, model, criterion, cache, device, groups, local_group)
+                if args.distributed:
+                    metrics = torch.tensor([val_ap, val_auc, total_loss, cache_edge_ratio_sum,
+                                            cache_node_ratio_sum, total_samples,
+                                            total_sampling_time, total_feature_fetch_time,
+                                            total_memory_update_time,
+                                            total_memory_write_back_time,
+                                            total_model_train_time
+                                            ]).to(device)
+                    torch.distributed.all_reduce(metrics, group=local_group)
+                    metrics /= args.local_world_size
+                    val_ap, val_auc, total_loss, cache_edge_ratio_sum, cache_node_ratio_sum, \
+                        total_samples, total_sampling_time, total_feature_fetch_time, \
+                        total_memory_update_time, total_memory_write_back_time, \
+                        total_model_train_time = metrics.tolist()
+                auc_list.append(val_auc)
+                loss_list.append(total_loss)
+                if len(tb_list) == 0:
+                    tb_list.append(epoch_time)
+                else:
+                    tb_list.append(epoch_time+tb_list[-1])
+                epoch_time = 0
+
+                if args.rank == 0:
+                    logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Validation ap {:.4f} | Validation auc {:.4f} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
+                        train_loader)/args.local_world_size), val_ap, val_auc, total_samples * args.local_world_size / (time.time() - start_time), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time, total_model_update_time, tb_list[-1]))
+                    
         epoch_time_sum += epoch_time
         # Validation
         if args.node_rank == 0:
@@ -658,8 +714,8 @@ def syn_model(model, is_training: int, group):
         return
     num_gpus = torch.tensor(data=(is_training), device=f'cuda:{args.local_rank}')
     dist.all_reduce(num_gpus, op=dist.ReduceOp.SUM, group=group)
-    if is_training == 0:
-        set_default_grad_to_zero(model)
+    # if is_training == 0:
+    set_default_grad_to_zero(model)
     for param in model.parameters():
         dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, group=group)
         param.grad /= num_gpus.item()

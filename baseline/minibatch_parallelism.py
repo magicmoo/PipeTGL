@@ -32,8 +32,8 @@ from gnnflow.temporal_sampler import TemporalSampler
 from gnnflow.utils import (DstRandEdgeSampler, EarlyStopMonitor,
                            build_dynamic_graph, get_pinned_buffers,
                            get_project_root_dir, load_dataset,
-                           mfgs_to_cuda, load_feat)
-# from modules.util import load_feat
+                           mfgs_to_cuda)
+from modules.util import load_feat
 
 datasets = ['REDDIT', 'GDELT', 'LASTFM', 'MAG', 'MOOC', 'WIKI']
 model_names = ['TGN', 'TGAT', 'DySAT', 'GRAPHSAGE', 'GAT']
@@ -54,7 +54,7 @@ parser.add_argument("--num-workers", help="num workers for dataloaders",
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
-                    type=int, default=20)
+                    type=int, default=1000)
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
@@ -223,7 +223,7 @@ def main():
             batch_size=batch_size, drop_last=False)
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, sampler=train_sampler,
+        train_ds, sampler=train_sampler, pin_memory=True,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
         val_ds, sampler=val_sampler,
@@ -377,6 +377,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         total_memory_write_back_time = 0
         total_model_train_time = 0
         total_samples = 0
+        total_model_update_time = 0
 
         train_iter = iter(train_loader)
         t1 = time.time()
@@ -465,8 +466,10 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             loss += criterion(pred_neg, torch.zeros_like(pred_neg))
             total_loss += float(loss) * num_target_nodes
             loss.backward()
-            optimizer.step()
             total_model_train_time += time.time() - model_train_start_time
+            model_update_start_time = time.time()
+            optimizer.step()
+            total_model_update_time += time.time() - model_update_start_time
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
@@ -480,21 +483,22 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                                             total_sampling_time, total_feature_fetch_time,
                                             total_memory_update_time,
                                             total_memory_write_back_time,
-                                            total_model_train_time
+                                            total_model_train_time,
+                                            total_model_update_time
                                             ]).to(device)
                     torch.distributed.all_reduce(metrics)
                     metrics /= args.world_size
                     total_loss, cache_edge_ratio_sum, cache_node_ratio_sum, \
                         total_samples, total_sampling_time, total_feature_fetch_time, \
                         total_memory_update_time, total_memory_write_back_time, \
-                        total_model_train_time = metrics.tolist()
+                        total_model_train_time, total_model_update_time = metrics.tolist()
 
                 if args.rank == 0:
-                    logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
-                        train_loader)/args.world_size), total_samples * args.world_size / (time.time() - start_time), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, time.time() - start_time))
+                    logging.info('Epoch {:d}/{:d} | Iter {:d}/{:d} | Throughput {:.2f} samples/s | Loss {:.4f} | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s | Total Time {:.2f}s'.format(e + 1, args.epoch, i + 1, int(len(
+                        train_loader)/args.world_size), total_samples * args.world_size / (time.time() - start_time), total_loss / (i + 1), cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, total_model_update_time, time.time() - start_time))
 
-        torch.distributed.barrier()
-        
+        # torch.distributed.barrier()
+        torch.cuda.synchronize()
         epoch_time = time.time()-start_time
         epoch_time_sum += epoch_time
 
@@ -512,13 +516,14 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                                     total_sampling_time, total_feature_fetch_time,
                                     total_memory_update_time,
                                     total_memory_write_back_time,
-                                    total_model_train_time]).to(device)
+                                    total_model_train_time,
+                                    total_model_update_time]).to(device)
             torch.distributed.all_reduce(metrics)
             metrics /= args.world_size
             val_ap, val_auc, cache_edge_ratio_sum, cache_node_ratio_sum, \
                 total_samples, total_sampling_time, total_feature_fetch_time, \
                 total_memory_update_time, total_memory_write_back_time, \
-                total_model_train_time = metrics.tolist()
+                total_model_train_time, total_model_update_time = metrics.tolist()
 
         if args.rank == 0:
             auc_list.append(val_auc)
@@ -527,9 +532,9 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 tb_list.append(epoch_time)
             else:
                 tb_list.append(epoch_time+tb_list[-1])
-            logging.info("Epoch {:d}/{:d} | train loss {:.4f} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s".format(
+            logging.info("Epoch {:d}/{:d} | train loss {:.4f} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Memory Write Back Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s".format(
 
-                e + 1, args.epoch, total_loss, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time))
+                e + 1, args.epoch, total_loss, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_fetch_time, total_memory_update_time, total_memory_write_back_time, total_model_train_time, total_model_update_time))
 
         if args.rank == 0 and val_ap > best_ap:
             best_e = e + 1
