@@ -161,6 +161,7 @@ class Memory:
         last_nodes, current_nodes = None, None
         self.recv_msg, self.pull_msg, self.send_msg, self.push_msg = [], [], [], []
         data_list = []
+        item, cnt = 0, 0
         for all_nodes, _, _ in data_loader:
             all_nodes = all_nodes[:length]
             target_nodes = np.unique(all_nodes)
@@ -179,6 +180,8 @@ class Memory:
             if last_nodes is not None:
                 self.recv_msg.append(torch.from_numpy(np.intersect1d(last_nodes, current_nodes)))
                 self.pull_msg.append(torch.from_numpy(np.setdiff1d(current_nodes, self.recv_msg[-1])))
+                item += self.recv_msg[-1].shape[0] / (current_nodes.shape[0])
+                cnt += 1
                 # self.recv_msg.append(None)
                 # self.pull_msg.append(None)
             else:
@@ -196,10 +199,11 @@ class Memory:
                 self.push_msg.append(torch.from_numpy(current_nodes))
                 # self.send_msg.append(None)
                 # self.push_msg.append(None)
+        print(item/cnt)
 
         # print(f'{rank}recv: ', [msg[:5] for msg in self.recv_msg[:5]])
         # print(f'{rank}send: ', [msg[:5] for msg in self.send_msg[:5]])
-    
+
     def recv_mem(self, iteration_now, rank, world_size, device, group = None, src=-1):
         # Returns the memory required for the current iteratio, the memory required for send to next iteration
         cached_idx = self.recv_msg[iteration_now//world_size]
@@ -248,6 +252,7 @@ class Memory:
         elif mem.shape[0] > 0:
             if dst==-1:
                 dst = (rank+1) % world_size
+            
             send_thread = threading.Thread(target=send, args=([mem, mail], rank, dst, group))
             send_thread.start()
         else:

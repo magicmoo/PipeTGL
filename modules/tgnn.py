@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional, Union
 
+from networkx import all_node_cuts
 import torch
 from dgl.heterograph import DGLBlock
 from gnnflow.distributed.kvstore import KVStoreClient
@@ -7,9 +8,11 @@ from gnnflow.models.modules.layers import EdgePredictor, TransfomerAttentionLaye
 import sys
 import os
 import numpy as np
+import threading
 from modules.memory import Memory
 from modules.memory_updater import GRUMemeoryUpdater
 import time
+import torch.distributed as dist
 
 
 class TGNN(torch.nn.Module):
@@ -143,6 +146,7 @@ class TGNN(torch.nn.Module):
         all_nodes = b.srcdata['ID'][:length]
         all_nodes_unique, inv = torch.unique(
             all_nodes.cpu(), return_inverse=True)
+        # print(all_nodes_unique.shape, 'hello')
         
         mem = self.memory.node_memory[all_nodes_unique].to(device)
         mail = self.memory.mailbox[all_nodes_unique].to(device)
@@ -455,6 +459,7 @@ class TGNN(torch.nn.Module):
             mem_ts = self.memory.node_memory_ts[pull_nodes].to(device)
             mail = self.memory.mailbox[pull_nodes].to(device)
             mail_ts = self.memory.mailbox_ts[pull_nodes].to(device)
+            # print(pull_nodes.shape)
         else:
             pull_nodes, mem, mem_ts, mail, mail_ts = input
         
@@ -467,7 +472,7 @@ class TGNN(torch.nn.Module):
 
         inv = torch.searchsorted(nid, all_nodes)
         if 'h' in b.srcdata:
-            b.srcdata['h'] += memory[inv]
+            b.srcdata['h'] = memory[inv] +  self.memory_updater.node_feat_proj(b.srcdata['h'])
         else:
             b.srcdata['h'] = memory[inv]
         

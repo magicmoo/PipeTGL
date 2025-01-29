@@ -59,9 +59,9 @@ parser.add_argument("--num-workers", help="num workers for dataloaders",
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
-                    type=int, default=100)
+                    type=int, default=1000)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ingestion-batch-size", type=int, default=1000,
+parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
 parser.add_argument("--edge-cache-ratio", type=float, default=0,
                     help="cache ratio for edge feature cache")
@@ -112,11 +112,15 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
             if args.rank!=0 or flag:
                 src = (args.rank-1+args.world_size)%args.world_size
                 idx = src
+                # recv(None, src, groups[idx])
                 recv(None, src, groups[idx])
 
             if args.use_memory:
                 b = mfgs[0][0]
                 updated_memory, overlap_nodes = model.update_memory_and_mail(b, update_length, edge_feats=cache.target_edge_features)
+            if args.use_memory:
+                b = mfgs[0][0]
+                model.prepare_input(b, updated_memory, overlap_nodes)
 
             if iteration_now+1 != int(len(dataloader)):
                 dst = (args.rank+1)%args.world_size
@@ -126,9 +130,7 @@ def evaluate(dataloader, sampler, model, criterion, cache, device, groups):
             iteration_now += args.world_size
             flag = True
             
-            if args.use_memory:
-                b = mfgs[0][0]
-                model.prepare_input(b, updated_memory, overlap_nodes)
+            
 
             pred_pos, pred_neg = model(mfgs)
 
@@ -209,7 +211,7 @@ def main():
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     train_loader = torch.utils.data.DataLoader(
         train_ds, sampler=train_sampler,
-        collate_fn=default_collate_ndarray, num_workers=args.num_workers, pin_memory=True)
+        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
         val_ds, sampler=val_sampler,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
@@ -342,10 +344,11 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
     for i in range(args.world_size):
         g = dist.new_group([i, (i+1)%args.world_size])
         groups.append(g)
-
-    # warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
+    src = (args.rank-1+args.world_size)%args.world_size
+    warm_up(train_loader, sampler, model, optimizer, criterion, cache, device, model_data, groups)
     dist.barrier()
-
+    ttt = 0
+    ttt1, ttt2 = 0, 0
     for e in range(args.epoch):
         start_time = time.time()
         t1 = time.time()
@@ -382,7 +385,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         sends_thread1 = None
         sends_thread2 = None
 
-        ttt = 0
+        
         if args.local_rank == 0:
             print(f'data load time = {(time.time()-t1):.2f}')
         while True:
@@ -413,13 +416,12 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             update_length = mfgs[-1][0].num_dst_nodes() * 2 // 3
 
+            # torch.cuda.synchronize()
             memory_update_start_time = time.perf_counter()
             
             tmp = time.perf_counter()
-            t1 = time.time()
             if sends_thread1 != None:
                sends_thread1.join()
-            ttt += time.perf_counter() - tmp
             t2 = time.time()
             if args.use_memory:
                 b = mfgs[0][0]
@@ -431,6 +433,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 if iteration_now+1+args.world_size == int(len(train_loader)):
                     push_msg, send_msg = None, None
                 idx = args.rank
+                
                 updated_memory, overlap_nid, sends_thread1 = model.update_memory_and_send(b, update_length, args.rank, args.world_size, groups[idx], mem, mail, push_msg, send_msg, edge_feats=cache.target_edge_features)
                 t4 = time.time()
             t5 = time.time()
@@ -439,6 +442,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             # print(t3-t2)
             # print(t4-t3)
             # print(t5-t4)
+            # torch.cuda.synchronize()
             total_memory_update_time += time.perf_counter() - memory_update_start_time
             
             model_train_start_time = time.perf_counter()
@@ -458,7 +462,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             model_update_start_time = time.perf_counter()
 
             # transfer
-            tmp = time.perf_counter()
             if sends_thread2 != None:
                sends_thread2.join()
             if args.rank!=0 or flag:
@@ -469,7 +472,6 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             else:
                 pull_model(model, model_data)
             flag = True
-            ttt += time.perf_counter() - tmp
 
             # update the model
             optimizer.step()
@@ -489,7 +491,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
 
             cache_edge_ratio_sum += cache.cache_edge_ratio
             cache_node_ratio_sum += cache.cache_node_ratio
-            # total_samples += num_target_nodes
+            total_samples += num_target_nodes
             i += 1
 
         torch.cuda.synchronize()
@@ -499,6 +501,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
         val_start = time.time()
         val_ap, val_auc = evaluate(
             val_loader, sampler, model, criterion, cache, device, groups)
+        # val_ap, val_auc = 1.0, 1.0
 
         val_res = torch.tensor([val_ap, val_auc]).to(device)
         torch.distributed.all_reduce(val_res)
@@ -523,10 +526,12 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             total_model_train_time, total_model_update_time = metrics.tolist()
 
         if args.rank == 0:
+            if e>0:
+                ttt1 += total_memory_update_time
+                ttt2 += total_model_update_time
             logging.info("Epoch {:d}/{:d} | train loss {:.4f} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s".format(
 
                 e + 1, args.epoch, total_loss, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time, total_model_update_time))
-            print(ttt)
             auc_list.append(val_auc)
             loss_list.append(total_loss)
             if len(tb_list) == 0:
@@ -540,6 +545,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
                 "Best val AP: {:.4f} & val AUC: {:.4f}".format(val_ap, val_auc))
 
     if args.rank == 0:
+        print(ttt1/(args.epoch-1), ttt2/(args.epoch-1))
         logging.info('Avg epoch time: {}'.format(epoch_time_sum / args.epoch))
         print(f'auc_list={auc_list}')
         print(f'loss_list={loss_list}')
@@ -564,6 +570,9 @@ def pull_model(model, model_data):
         i += 1
 
 def send(tensors: list, target: int, group: object = None):
+
+    # tensor = torch.tensor([args.local_rank]).to(f'cuda:{args.local_rank}')
+    # req = dist.isend(tensor, target, group)
     
     if tensors == None:
         tensor = torch.tensor([args.local_rank]).to(f'cuda:{args.local_rank}')

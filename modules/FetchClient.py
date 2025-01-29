@@ -47,11 +47,11 @@ class FetchClient:
         self.dim_node = 0 if node_feats is None else node_feats.shape[1]
         self.dim_edge = 0 if edge_feats is None else edge_feats.shape[1]
         if self.dim_node != 0:
-            self.shm_nodes = create_shared_mem_array(f'nodes{self.local_rank}', [num_target_nodes*10+1], torch.int64)
-            self.shm_node_feats = create_shared_mem_array(f'node_feats{self.local_rank}', [num_target_nodes*10, self.dim_node], torch.float32)
+            self.shm_nodes = create_shared_mem_array(f'nodes{self.local_rank}', [num_target_nodes*11+1], torch.int64)
+            self.shm_node_feats = create_shared_mem_array(f'node_feats{self.local_rank}', [num_target_nodes*11, self.dim_node], torch.float32)
         if self.dim_edge != 0:
-            self.shm_edges = create_shared_mem_array(f'edges{self.local_rank}', [num_target_nodes*10+1], torch.int64)
-            self.shm_edge_feats = create_shared_mem_array(f'edge_feats{self.local_rank}', [num_target_nodes*10, self.dim_edge], torch.float32)
+            self.shm_edges = create_shared_mem_array(f'edges{self.local_rank}', [num_target_nodes*11+1], torch.int64)
+            self.shm_edge_feats = create_shared_mem_array(f'edge_feats{self.local_rank}', [num_target_nodes*11, self.dim_edge], torch.float32)
             self.shm_target_edges = create_shared_mem_array(f'target_edge{self.local_rank}', [num_target_nodes//3+1], torch.int64)
             self.shm_target_edge_feats = create_shared_mem_array(f'target_edge_feats{self.local_rank}', [num_target_nodes//3, self.dim_edge], torch.float32)
         node_feats_shape = None if node_feats is None else node_feats.shape
@@ -87,23 +87,23 @@ class FetchClient:
                 if iteration_now + self.local_world_size >= self.cnt_interations:
                     break
                 stream.wait_stream(torch.cuda.current_stream())
-                # with torch.cuda.stream(stream):
-                    # mfgs, eid = q_input.get()
-                    # nodes, edges = mfgs[0][0].srcdata['ID'], mfgs[0][0].edata['ID']
-                    # t1 = time.time()
-                    # # q_IO1.put((nodes, edges, eid))
-                    # if self.dim_node != 0:
-                    #     num_nodes = nodes.shape[0]
-                    #     self.shm_nodes[0] = num_nodes
-                    #     self.shm_nodes[1:num_nodes+1] = nodes[:]
-                    # if self.dim_edge != 0:
-                    #     num_edges = edges.shape[0]
-                    #     self.shm_edges[0] = num_edges
-                    #     num_target_edges = len(eid)
-                    #     self.shm_target_edges[0] = num_target_edges
-                    #     self.shm_edges[1:num_edges+1], self.shm_target_edges[1:num_target_edges+1] = edges[:], torch.tensor(eid)
-                    # stream.synchronize()
-                    # event1.set()
+                with torch.cuda.stream(stream):
+                    mfgs, eid = q_input.get()
+                    nodes, edges = mfgs[0][0].srcdata['ID'], mfgs[0][0].edata['ID']
+                    t1 = time.time()
+                    # q_IO1.put((nodes, edges, eid))
+                    if self.dim_node != 0:
+                        num_nodes = nodes.shape[0]
+                        self.shm_nodes[0] = num_nodes
+                        self.shm_nodes[1:num_nodes+1] = nodes[:]
+                    if self.dim_edge != 0:
+                        num_edges = edges.shape[0]
+                        self.shm_edges[0] = num_edges
+                        num_target_edges = len(eid)
+                        self.shm_target_edges[0] = num_target_edges
+                        self.shm_edges[1:num_edges+1], self.shm_target_edges[1:num_target_edges+1] = edges[:], torch.tensor(eid)
+                    stream.synchronize()
+                    event1.set()
                     # t2 = time.time()
                     # tt += t2-t1
                     # event2.wait()

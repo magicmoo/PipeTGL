@@ -66,9 +66,9 @@ parser.add_argument("--num-workers", help="num workers for dataloaders",
 parser.add_argument("--num-chunks", help="number of chunks for batch sampler",
                     type=int, default=1)
 parser.add_argument("--print-freq", help="print frequency",
-                    type=int, default=100)
+                    type=int, default=1000)
 parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ingestion-batch-size", type=int, default=1000,
+parser.add_argument("--ingestion-batch-size", type=int, default=10000000,
                     help="ingestion batch size")
 parser.add_argument("--edge-cache-ratio", type=float, default=0,
                     help="cache ratio for edge feature cache")
@@ -575,7 +575,7 @@ def train(train_loader, val_loader, sampler, model, optimizer, criterion,
             logging.info("Epoch {:d}/{:d} | train loss {:.4f} | Validation ap {:.4f} | Validation auc {:.4f} | Train time {:.2f} s | Validation time {:.2f} s | Train Throughput {:.2f} samples/s | Cache node ratio {:.4f} | Cache edge ratio {:.4f} | Total Sampling Time {:.2f}s | Total Feature Fetching Time {:.2f}s | Total Memory Update Time {:.2f}s | Total Model Train Time {:.2f}s | Total Model Update Time {:.2f}s".format(
 
                 e + 1, args.epoch, total_loss, val_ap, val_auc, epoch_time, val_time, total_samples * args.world_size / epoch_time, cache_node_ratio_sum / (i + 1), cache_edge_ratio_sum / (i + 1), total_sampling_time, total_feature_fetch_time, total_memory_update_time, total_model_train_time, total_model_update_time))
-            print(ttt)
+            # print(ttt)
             auc_list.append(val_auc)
             loss_list.append(total_loss)
             if len(tb_list) == 0:
