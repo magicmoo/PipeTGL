@@ -223,7 +223,7 @@ def main():
             batch_size=batch_size, drop_last=False)
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, sampler=train_sampler, pin_memory=True,
+        train_ds, sampler=train_sampler,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
         val_ds, sampler=val_sampler,

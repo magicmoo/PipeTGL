@@ -217,7 +217,7 @@ def main():
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     train_loader = torch.utils.data.DataLoader(
         train_ds, sampler=train_sampler,
-        collate_fn=default_collate_ndarray, num_workers=args.num_workers, pin_memory=True)
+        collate_fn=default_collate_ndarray, num_workers=args.num_workers)
     val_loader = torch.utils.data.DataLoader(
         val_ds, sampler=val_sampler,
         collate_fn=default_collate_ndarray, num_workers=args.num_workers)
