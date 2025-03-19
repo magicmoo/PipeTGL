@@ -40,17 +40,17 @@ Training TGN model on the \<DatasetName> dataset with \<NumberOfEpochs> epochs o
 ./scripts/run_single_mechine.sh <NumberOfEpochs> <DatasetName> <NumberOfGpus>
 
 
-# Training TGN model on the REDDIT dataset with 50 epochs on 4 GPUs:
+# Training TGN model on the REDDIT dataset with 50 epochs on 4 GPUs within a single mechine:
 ./scripts/run_single_mechine.sh 50 REDDIT 4   
 ```
 
 ### 2.Distributed training
-Training TGN model on the \<DatasetName> dataset with \<NumberOfEpochs> epochs on \<NumberOfGpus> GPUs on each of \<NumberOfNodes> mechines. 
+Training TGN model on the \<DatasetName> dataset with \<NumberOfEpochs> epochs on \<NumberOfGpus> GPUs per machine across a total number of \<NumberOfNodes> machines.
 
 ```sh
 ./scripts/run_multi_mechines.sh <NumberOfEpochs> <DatasetName> <NumberOfGpus> <NumberOfNodes>
 
 
-# Training TGN model on the GDELT dataset with 100 epochs on 4 GPUs on each of 2 mechines:
+# Training TGN model on the GDELT dataset with 100 epochs on 4 GPUs per machine across a total number of 2 machines:
 ./scripts/run_multi_mechines.sh 100 GDELT 4 2   
 ```
