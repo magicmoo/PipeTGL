@@ -35,7 +35,7 @@ cd scripts/ && ./download_data.sh
 ## 🚀 Get Started
 
 ### 1.Multi-GPU single machine
-Training TGN model on the <DatasetName> dataset with <NumberOfEpochs> epochs on <NumberOfGpus> GPUs.
+Training TGN model on the \<DatasetName> dataset with \<NumberOfEpochs> epochs on \<NumberOfGpus> GPUs.
 ```sh
 ./scripts/run_single_mechine.sh <NumberOfEpochs> <DatasetName> <NumberOfGpus>
 
@@ -45,7 +45,7 @@ Training TGN model on the <DatasetName> dataset with <NumberOfEpochs> epochs on 
 ```
 
 ### 2.Distributed training
-Training TGN model on the <DatasetName> dataset with <NumberOfEpochs> epochs on <NumberOfGpus> GPUs on each of <NumberOfNodes> mechines. 
+Training TGN model on the \<DatasetName> dataset with \<NumberOfEpochs> epochs on \<NumberOfGpus> GPUs on each of \<NumberOfNodes> mechines. 
 
 ```sh
 ./scripts/run_multi_mechines.sh <NumberOfEpochs> <DatasetName> <NumberOfGpus> <NumberOfNodes>
