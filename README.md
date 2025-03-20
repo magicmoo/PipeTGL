@@ -11,11 +11,10 @@ In this paper, we propose a pipeline parallel approach for multi-GPU M-TGNN trai
 ### 1.Dependencies
 
 Our development environment:
-- Ubuntu 20.04LTS
+- Ubuntu 22.04
 - g++ 9.4
 - CUDA 12.4
 - cmake 3.23
-Dependencies:
 - torch >= 1.10
 - dgl >= 1.1.1 (CUDA version)
 - tqdm >= 4.66.2
