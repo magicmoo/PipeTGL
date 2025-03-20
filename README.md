@@ -8,9 +8,20 @@ In this paper, we propose a pipeline parallel approach for multi-GPU M-TGNN trai
 
 ## 🔑 Setup
 
-### 1.Setup CUDA
+### 1.Dependencies
 
-PipeTGL has been tested with CUDA 12.4 on RTX4090.
+Our development environment:
+- Ubuntu 20.04LTS
+- g++ 9.4
+- CUDA 12.4
+- cmake 3.23
+Dependencies:
+- torch >= 1.10
+- dgl >= 1.1.1 (CUDA version)
+- tqdm >= 4.66.2
+- scikit-learn >= 1.3.0
+- pandas >= 2.2.1
+- numpy >= 1.26.4
 
 ### 2.Clone repository
 
